@@ -20,6 +20,7 @@ DEFAULT_FORMULA_FETCH_MULTIPLIER = 8
 FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
 MAX_MODIFIED_EQUIV_CHECKS = 8
 DISTRACTION_CANDIDATE_MULTIPLIER = 4
+MAX_AUTOMATIC_TRANSFORM_CYCLES = 8
 
 
 def _req_int_ge(name: str, value: int, minimum: int) -> None:
@@ -435,12 +436,13 @@ def _ensure_bridge(bridge: PrologBridge | None = None) -> PrologBridge:
 
 
 def _operator_cycle_count(formula: Any, rng: random.Random, max_cycles: int | None = None) -> int:
-    """Sceglie un numero di cicli compreso tra meta e massimo degli atomi disponibili."""
+    """Sceglie un numero di cicli compreso tra meta e massimo delle trasformazioni disponibili."""
     atom_count = formula_atom_count(_as_ast(formula))
     if atom_count <= 0:
         return 0
 
-    upper_bound = atom_count if max_cycles is None else min(atom_count, max_cycles)
+    automatic_max = min(MAX_AUTOMATIC_TRANSFORM_CYCLES, max(1, atom_count * 2))
+    upper_bound = automatic_max if max_cycles is None else min(automatic_max, max_cycles)
     upper_bound = max(1, upper_bound)
     lower_bound = max(1, math.ceil(upper_bound / 2))
     return rng.randint(lower_bound, upper_bound)
@@ -508,6 +510,18 @@ def _maybe_swap_and_or(formula: str, rng: random.Random, swap_probability: float
 def _needs_extra_transformation(formula: str) -> bool:
     """Rileva se la formula richiede una trasformazione aggiuntiva."""
     return _formula_head(formula) in {"imp", "iff", "not"}
+
+
+def _normalize_formula_text(formula: Any) -> str:
+    """Normalizza una formula in testo Prolog senza spazi superflui."""
+    return _as_prolog(formula).replace(" ", "")
+
+
+def _require_pairwise_distinct(formulas: Sequence[Any], context: str) -> None:
+    """Verifica che tutte le formule siano diverse tra loro."""
+    normalized = [_normalize_formula_text(formula) for formula in formulas]
+    if len(set(normalized)) != len(normalized):
+        raise RuntimeError(f"Postcondizione fallita: formule non distinte in {context}")
 
 
 def _transform_answer_candidates(
@@ -980,6 +994,7 @@ def build_tvq(
 
         selected_true = rng.sample(true_candidates, true_options_count)
         selected_false = rng.sample(false_candidates, false_options_count)
+        _require_pairwise_distinct(selected_true + selected_false, "build_tvq options")
 
         true_entries = [
             _formula_entry(formula, label=f"opzione vera n{index}", is_true=True)
@@ -1130,6 +1145,11 @@ def build_exercise(
         seed=seed,
         timeout=remaining_timeout(total_timeout),
         timeout_provider=remaining_timeout,
+    )
+
+    _require_pairwise_distinct(
+        [question_prolog, modified_prolog, *wrong_selected],
+        "build_exercise question/correct/wrongs",
     )
 
     original_formula = _formula_entry(question_expr, label="formula originale")
