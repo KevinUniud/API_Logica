@@ -461,6 +461,122 @@ def _formula_entry(expr: Any, **extra) -> dict:
     return formula_payload(_as_ast(expr), **extra)
 
 
+def _has_atom_count(formula: Any, target_atom_count: int | None) -> bool:
+    """Verifica l uguaglianza del numero di atomi quando richiesto."""
+    if target_atom_count is None:
+        return True
+    return formula_atom_count(_as_ast(formula)) == target_atom_count
+
+
+def _swap_and_or_rec(node: Any, rng: random.Random, swap_probability: float = 0.5) -> Any:
+    """Scambia casualmente i figli di and/or mantenendo intatto il resto della formula."""
+    if isinstance(node, Var):
+        return node
+    if isinstance(node, Not):
+        return Not(_swap_and_or_rec(node.expr, rng, swap_probability))
+    if isinstance(node, And):
+        left = _swap_and_or_rec(node.left, rng, swap_probability)
+        right = _swap_and_or_rec(node.right, rng, swap_probability)
+        if rng.random() < swap_probability:
+            return And(right, left)
+        return And(left, right)
+    if isinstance(node, Or):
+        left = _swap_and_or_rec(node.left, rng, swap_probability)
+        right = _swap_and_or_rec(node.right, rng, swap_probability)
+        if rng.random() < swap_probability:
+            return Or(right, left)
+        return Or(left, right)
+    if isinstance(node, Imp):
+        return Imp(
+            _swap_and_or_rec(node.left, rng, swap_probability),
+            _swap_and_or_rec(node.right, rng, swap_probability),
+        )
+    if isinstance(node, Iff):
+        return Iff(
+            _swap_and_or_rec(node.left, rng, swap_probability),
+            _swap_and_or_rec(node.right, rng, swap_probability),
+        )
+    return node
+
+
+def _maybe_swap_and_or(formula: str, rng: random.Random, swap_probability: float = 0.5) -> str:
+    """Applica opzionalmente swap ai nodi and/or della formula."""
+    swapped = _swap_and_or_rec(_as_ast(formula), rng, swap_probability)
+    return to_prolog(swapped)
+
+
+def _needs_extra_transformation(formula: str) -> bool:
+    """Rileva se la formula richiede una trasformazione aggiuntiva."""
+    return _formula_head(formula) in {"imp", "iff", "not"}
+
+
+def _transform_answer_candidates(
+    *,
+    formula: str,
+    bridge: PrologBridge,
+    rng: random.Random,
+    operator_cycles: int | None,
+    timeout_provider: Callable[[], int],
+) -> list[str]:
+    """Genera varianti risposta usando Prolog quando disponibile, con fallback Python."""
+    transformed: list[str] = []
+    answer_cycles_fn = getattr(bridge, "apply_answer_transform_cycles", None)
+    if callable(answer_cycles_fn):
+        cycles = _operator_cycle_count(formula, rng, operator_cycles)
+        if cycles > 0:
+            try:
+                transformed = cast(Callable[..., list[str]], answer_cycles_fn)(
+                    formula,
+                    cycles=cycles,
+                    timeout=timeout_provider(),
+                )
+            except Exception:
+                transformed = []
+
+    if transformed:
+        return list(dict.fromkeys([formula] + transformed))
+
+    fallback = [formula, _maybe_swap_and_or(formula, rng)]
+    if operator_cycles == 0:
+        return list(dict.fromkeys(fallback))
+
+    apply_cycles = getattr(bridge, "apply_operator_cycles", None)
+    if not callable(apply_cycles):
+        return list(dict.fromkeys(fallback))
+
+    cycle_fn = cast(Callable[..., list[str]], apply_cycles)
+    candidate_cycles = _operator_cycle_count(formula, rng, operator_cycles)
+    if candidate_cycles <= 0:
+        return list(dict.fromkeys(fallback))
+
+    try:
+        enriched_candidates = cycle_fn(
+            formula,
+            cycles=candidate_cycles,
+            timeout=timeout_provider(),
+        )
+    except Exception:
+        enriched_candidates = []
+
+    for enriched in enriched_candidates:
+        fallback.append(enriched)
+        fallback.append(_maybe_swap_and_or(enriched, rng))
+        if _needs_extra_transformation(enriched):
+            try:
+                extra_candidates = cycle_fn(
+                    enriched,
+                    cycles=1,
+                    timeout=timeout_provider(),
+                )
+            except Exception:
+                extra_candidates = []
+            for extra in extra_candidates:
+                fallback.append(extra)
+                fallback.append(_maybe_swap_and_or(extra, rng))
+
+    return list(dict.fromkeys(fallback))
+
+
 def generate_formula(
     depth: int | None = None,
     variables: Sequence[str] = DEFAULT_VARIABLES,
@@ -522,11 +638,36 @@ def _pick_modified(
     variables,
     bridge: PrologBridge,
     filter_equiv_batch: Callable[[Sequence[str]], list[str]],
+    target_atom_count: int | None = None,
     seed: int | None = None,
     timeout: int = 10,
 ) -> tuple[str, int]:
     """Seleziona una formula equivalente riscritta e stima i passi di rewrite."""
     rng = random.Random(seed)
+
+    def finalize_candidate(candidate: str, steps: int) -> tuple[str, int]:
+        selected = _maybe_swap_and_or(candidate, rng)
+        selected_steps = steps
+        if _needs_extra_transformation(candidate):
+            try:
+                extra_raw = bridge.rewrite_formula(candidate, timeout=timeout)
+            except Exception:
+                extra_raw = []
+
+            extra_candidates = [
+                item
+                for item in extra_raw
+                if item
+                and item != question_prolog
+                and _uses_vars(item, variables)
+                and _has_atom_count(item, target_atom_count)
+            ]
+            if extra_candidates:
+                equivalent_extra = filter_equiv_batch(extra_candidates)
+                if equivalent_extra:
+                    selected = _maybe_swap_and_or(rng.choice(equivalent_extra), rng)
+                    selected_steps += 1
+        return selected, selected_steps
 
     try:
         path = bridge.rewrite_path(question_prolog, timeout=timeout)
@@ -539,6 +680,8 @@ def _pick_modified(
         if not candidate or candidate == question_prolog or candidate in seen:
             continue
         if not _uses_vars(candidate, variables):
+            continue
+        if not _has_atom_count(candidate, target_atom_count):
             continue
         seen.add(candidate)
         path_candidates.append(candidate)
@@ -555,7 +698,7 @@ def _pick_modified(
 
     if ordered_candidates:
         selected_steps = rng.randint(1, len(ordered_candidates))
-        return ordered_candidates[selected_steps - 1], selected_steps
+        return finalize_candidate(ordered_candidates[selected_steps - 1], selected_steps)
 
     candidates = bridge.rewrite_formula(question_prolog, timeout=timeout)
     fallback_candidates: list[str] = []
@@ -563,6 +706,8 @@ def _pick_modified(
         if not candidate or candidate == question_prolog or candidate in seen:
             continue
         if not _uses_vars(candidate, variables):
+            continue
+        if not _has_atom_count(candidate, target_atom_count):
             continue
         seen.add(candidate)
         fallback_candidates.append(candidate)
@@ -578,7 +723,7 @@ def _pick_modified(
             equivalent_fallbacks = []
 
     if equivalent_fallbacks:
-        return rng.choice(equivalent_fallbacks), 1
+        return finalize_candidate(rng.choice(equivalent_fallbacks), 1)
 
     raise RuntimeError("Nessuna formula modificata equivalente trovata")
 
@@ -587,9 +732,11 @@ def _pick_wrongs(
     question_prolog: str,
     correct_prolog: str,
     variables,
+    target_atom_count: int | None,
     wrong_answers_count: int,
     max_steps: int,
     operator_cycles: int | None,
+    from_correct_answer: bool,
     bridge: PrologBridge,
     filter_wrong_batch: Callable[[Sequence[str]], list[str]],
     seed: int | None = None,
@@ -600,6 +747,7 @@ def _pick_wrongs(
     rng = random.Random(seed)
     collected: list[str] = []
     seen = {question_prolog, correct_prolog}
+    source_formula = correct_prolog if from_correct_answer else question_prolog
     distract_timeout = max(1, min(timeout, 3))
     candidate_limit = max(wrong_answers_count * DISTRACTION_CANDIDATE_MULTIPLIER, 4)
 
@@ -615,34 +763,28 @@ def _pick_wrongs(
             if candidate
             and candidate not in seen
             and _uses_vars(candidate, variables)
+            and _has_atom_count(candidate, target_atom_count)
         ]
         if not unseen:
             return False
 
-        expanded = list(unseen)
-        if operator_cycles != 0:
-            apply_cycles = getattr(bridge, "apply_operator_cycles", None)
-            if callable(apply_cycles):
-                cycle_fn = cast(Callable[..., list[str]], apply_cycles)
-                for candidate in unseen:
-                    candidate_cycles = _operator_cycle_count(candidate, rng, operator_cycles)
-                    if candidate_cycles <= 0:
-                        continue
-                    enriched_candidates = safe_call(
-                        cycle_fn,
-                        candidate,
-                        cycles=candidate_cycles,
-                        timeout=current_timeout(),
-                    )
-                    for enriched in enriched_candidates:
-                        if (
-                            enriched
-                            and enriched not in seen
-                            and _uses_vars(enriched, variables)
-                        ):
-                            expanded.append(enriched)
+        expanded: list[str] = []
+        for candidate in unseen:
+            expanded.extend(
+                _transform_answer_candidates(
+                    formula=candidate,
+                    bridge=bridge,
+                    rng=rng,
+                    operator_cycles=operator_cycles,
+                    timeout_provider=current_timeout,
+                )
+            )
 
-        expanded = list(dict.fromkeys(expanded))
+        expanded = [
+            candidate
+            for candidate in dict.fromkeys(expanded)
+            if candidate and _uses_vars(candidate, variables) and _has_atom_count(candidate, target_atom_count)
+        ]
 
         seen.update(expanded)
         wrong_candidates = filter_wrong_batch(expanded)
@@ -667,8 +809,8 @@ def _pick_wrongs(
     if callable(some_one_step):
         deterministic_sources.append(
             lambda: safe_call(
-                some_one_step,
-                question_prolog,
+                cast(Callable[..., object], some_one_step),
+                source_formula,
                 limit=candidate_limit,
                 timeout=current_timeout(),
             )
@@ -677,7 +819,7 @@ def _pick_wrongs(
         deterministic_sources.append(
             lambda: safe_call(
                 bridge.all_step_neq,
-                question_prolog,
+                source_formula,
                 timeout=current_timeout(),
             )
         )
@@ -685,7 +827,7 @@ def _pick_wrongs(
     deterministic_sources.append(
         lambda: safe_call(
             bridge.one_step_neq,
-            question_prolog,
+            source_formula,
             timeout=current_timeout(),
         )
     )
@@ -694,8 +836,8 @@ def _pick_wrongs(
     if callable(some_multi_step):
         deterministic_sources.append(
             lambda: safe_call(
-                some_multi_step,
-                question_prolog,
+                cast(Callable[..., object], some_multi_step),
+                source_formula,
                 max_steps=max_steps,
                 limit=candidate_limit,
                 timeout=current_timeout(),
@@ -705,7 +847,7 @@ def _pick_wrongs(
     deterministic_sources.append(
         lambda: safe_call(
             bridge.non_equivalent_distraction,
-            question_prolog,
+            source_formula,
             max_steps=max_steps,
             timeout=current_timeout(),
         )
@@ -764,6 +906,7 @@ def build_tvq(
     candidates: list[str] = []
     seen_candidates: set[str] = set()
     allowed_variables = set(variables)
+    target_atom_count = predicate_count
 
     def register_candidate(formula: str) -> None:
         if not formula or formula in seen_candidates:
@@ -773,25 +916,21 @@ def build_tvq(
             return
         if not used_variables.issubset(allowed_variables):
             return
+        if not _has_atom_count(formula, target_atom_count):
+            return
         seen_candidates.add(formula)
         candidates.append(formula)
 
     def register_with_operator_cycles(formula: str) -> None:
-        register_candidate(formula)
-        if operator_cycles == 0:
-            return
-        try:
-            cycle_count = _operator_cycle_count(formula, rng, operator_cycles)
-            enriched_candidates = bridge.apply_operator_cycles(
-                formula,
-                cycles=cycle_count,
-                timeout=remaining_timeout(2),
-            )
-        except Exception:
-            return
-
-        for enriched in enriched_candidates:
-            register_candidate(enriched)
+        transformed = _transform_answer_candidates(
+            formula=formula,
+            bridge=bridge,
+            rng=rng,
+            operator_cycles=operator_cycles,
+            timeout_provider=lambda: remaining_timeout(2),
+        )
+        for candidate in transformed:
+            register_candidate(candidate)
 
     for variable in variables:
         register_candidate(variable)
@@ -816,7 +955,7 @@ def build_tvq(
 
     if len(candidates) < required_options:
         raise RuntimeError(
-            "Non ci sono abbastanza formule candidate per costruire le opzioni richieste"
+            "Non ci sono abbastanza formule candidate con il numero di atomi richiesto"
         )
 
     for valuation in valuations:
@@ -883,6 +1022,7 @@ def build_exercise(
     wrong_answers_count: int = 3,
     max_steps: int = 2,
     operator_cycles: int | None = None,
+    wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
     seed: int | None = None,
     timeout: int = 10,
@@ -898,6 +1038,7 @@ def build_exercise(
     question_prolog = to_prolog(expr) if not isinstance(expr, str) else expr
     question_expr = from_prolog(question_prolog)
     variables = sorted(collect_variables(question_expr))
+    question_atom_count = formula_atom_count(question_expr)
     total_timeout = max(1, int(timeout))
     deadline = time.monotonic() + total_timeout
     check_timeout = max(1, min(total_timeout, 2))
@@ -967,6 +1108,7 @@ def build_exercise(
         variables=variables,
         bridge=bridge,
         filter_equiv_batch=filter_equiv_batch,
+        target_atom_count=question_atom_count,
         seed=seed,
         timeout=remaining_timeout(total_timeout),
     )
@@ -978,9 +1120,11 @@ def build_exercise(
         question_prolog=question_prolog,
         correct_prolog=modified_prolog,
         variables=variables,
+        target_atom_count=question_atom_count,
         wrong_answers_count=wrong_answers_count,
         max_steps=max_steps,
         operator_cycles=operator_cycles,
+        from_correct_answer=wrong_from_correct,
         bridge=bridge,
         filter_wrong_batch=filter_wrong_batch,
         seed=seed,
@@ -1005,6 +1149,7 @@ def build_exercise(
         "variables": variables,
         "depth": formula_depth(question_expr),
         "size": formula_size(question_expr),
+        "atom_count": question_atom_count,
         "max_steps": max_steps,
         "rewrite_steps": rewrite_steps,
         "source": "prolog_builder",
@@ -1034,6 +1179,7 @@ def build_ex_depth(
     wrong_answers_count: int = 3,
     max_steps: int = 2,
     operator_cycles: int | None = None,
+    wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
 ) -> dict:
     """Costruisce un esercizio a partire da profondita e vincoli sulle variabili."""
@@ -1084,6 +1230,7 @@ def build_ex_depth(
                 wrong_answers_count=wrong_answers_count,
                 max_steps=max_steps,
                 operator_cycles=operator_cycles,
+                wrong_from_correct=wrong_from_correct,
                 timeout=remaining_timeout(total_timeout),
             )
         except RuntimeError as exc:
@@ -1102,6 +1249,7 @@ def build_ex_json(
     wrong_answers_count: int = 3,
     max_steps: int = 2,
     operator_cycles: int | None = None,
+    wrong_from_correct: bool = False,
     timeout: int = 10,
 ) -> str:
     """Serializza l output di build_exercise come stringa JSON formattata."""
@@ -1118,6 +1266,7 @@ def build_ex_json(
             wrong_answers_count=wrong_answers_count,
             max_steps=max_steps,
             operator_cycles=operator_cycles,
+            wrong_from_correct=wrong_from_correct,
             timeout=timeout,
         ),
         ensure_ascii=False,
@@ -1134,6 +1283,7 @@ def build_ex_depth_json(
     wrong_answers_count: int = 3,
     max_steps: int = 2,
     operator_cycles: int | None = None,
+    wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
 ) -> str:
     """Serializza l output di build_ex_depth come stringa JSON formattata."""
@@ -1152,6 +1302,7 @@ def build_ex_depth_json(
             wrong_answers_count=wrong_answers_count,
             max_steps=max_steps,
             operator_cycles=operator_cycles,
+            wrong_from_correct=wrong_from_correct,
             bridge=bridge,
         ),
         ensure_ascii=False,

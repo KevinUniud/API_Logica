@@ -9,6 +9,22 @@ from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
 
 
+def _count_atoms(prolog_formula: str) -> int:
+    """Conta gli atomi presenti in una formula Prolog."""
+    ast = from_prolog(prolog_formula)
+
+    def walk(node):
+        if isinstance(node, Var):
+            return 1
+        if isinstance(node, Not):
+            return walk(node.expr)
+        if isinstance(node, (And, Or, Imp, Iff)):
+            return walk(node.left) + walk(node.right)
+        raise TypeError(f"Nodo non supportato: {type(node)!r}")
+
+    return walk(ast)
+
+
 class FakeBridge:
     def __init__(self):
         """Inizializza lo stato del double di test."""
@@ -378,6 +394,109 @@ class GeneratorTests(unittest.TestCase):
         for wrong in exercise["wrong_answers_prolog"]:
             used = collect_variables(from_prolog(wrong))
             self.assertEqual(used, {"p", "q"}, msg=f"Distractor con variabili non valide: {wrong}")
+
+    def test_ex_depth_atom_count_matches_question(self):
+        """Verifica che domanda, corretta e distractor abbiano stesso numero di atomi."""
+        exercise = build_ex_depth(
+            depth=2,
+            variables=["p", "q"],
+            wrong_answers_count=3,
+            max_steps=2,
+            seed=9,
+            bridge=FakeBridge(),
+        )
+
+        question_atoms = _count_atoms(exercise["question_prolog"])
+        self.assertEqual(question_atoms, _count_atoms(exercise["correct_answer_prolog"]))
+        self.assertTrue(
+            all(_count_atoms(wrong) == question_atoms for wrong in exercise["wrong_answers_prolog"])
+        )
+
+    def test_wrong_from_correct_switches_source_formula(self):
+        """Verifica che wrong_from_correct usi la risposta corretta come sorgente distractor."""
+        class SourceSwitchBridge(FakeBridge):
+            def __init__(self):
+                """Inizializza lo stato del double di test."""
+                super().__init__()
+                self.called_sources: list[str] = []
+                self.source_map = {
+                    "and(p,q)": ["and(p,not(q))", "or(not(p),q)", "imp(p,q)"],
+                    "or(p,q)": ["or(p,not(q))", "and(not(p),q)", "imp(q,p)"],
+                }
+
+            def formula_of_depth(self, depth, variables, timeout=10):
+                """Restituisce una sola formula per rendere stabile la sorgente test."""
+                return ["and(p,q)"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                """Restituisce campione limitato dalla formula fissa."""
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                """Forza una risposta corretta diversa ma equivalente nel test."""
+                if expr == "and(p,q)":
+                    return ["and(p,q)", "or(p,q)"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                """Riusa il path come fallback rewrite."""
+                return self.rewrite_path(expr, timeout=timeout)
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                """Simula equivalenza solo per la coppia attesa nel test."""
+                if left == "and(p,q)" and right == "or(p,q)":
+                    return True
+                return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
+
+            def all_step_neq(self, expr, timeout=10):
+                """Registra quale formula viene usata come sorgente dei distractor."""
+                self.called_sources.append(expr)
+                if expr == "and(q,p)":
+                    expr = "and(p,q)"
+                if expr == "or(q,p)":
+                    expr = "or(p,q)"
+                return list(self.source_map.get(expr, []))
+
+            def one_step_neq(self, expr, timeout=10):
+                """Riusa la stessa sorgente distractor tracciando la formula sorgente."""
+                self.called_sources.append(expr)
+                return list(self.source_map.get(expr, []))
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                """Riusa la stessa sorgente distractor tracciando la formula sorgente."""
+                self.called_sources.append(expr)
+                return list(self.source_map.get(expr, []))
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                """Valuta non-equivalenza rispetto alla sorgente passata nel test."""
+                return True
+
+        legacy_bridge = SourceSwitchBridge()
+        build_ex_depth(
+            depth=2,
+            variables=["p", "q"],
+            wrong_answers_count=2,
+            max_steps=2,
+            seed=13,
+            wrong_from_correct=False,
+            bridge=legacy_bridge,
+        )
+        self.assertIn("and(p,q)", legacy_bridge.called_sources)
+
+        from_correct_bridge = SourceSwitchBridge()
+        build_ex_depth(
+            depth=2,
+            variables=["p", "q"],
+            wrong_answers_count=2,
+            max_steps=2,
+            seed=13,
+            wrong_from_correct=True,
+            bridge=from_correct_bridge,
+        )
+        self.assertTrue(
+            "or(p,q)" in from_correct_bridge.called_sources
+            or "or(q,p)" in from_correct_bridge.called_sources
+        )
 
 
 class PrologBridgeTests(unittest.TestCase):

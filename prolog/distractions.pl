@@ -291,6 +291,69 @@ apply_operator_cycles_(Cycles, Formula, Result) :-
     NextCycles is Cycles - 1,
     apply_operator_cycles_(NextCycles, Changed, Result).
 
+% ============================================================
+% Trasformazioni risposta (pipeline orientata alle opzioni)
+% ============================================================
+
+maybe_swap_operands(and(A, B), and(B, A)) :-
+    R is random_float,
+    R < 0.5,
+    !.
+maybe_swap_operands(or(A, B), or(B, A)) :-
+    R is random_float,
+    R < 0.5,
+    !.
+maybe_swap_operands(Formula, Formula).
+
+swap_and_or_children(Atom, Atom) :-
+    atomic(Atom),
+    !.
+swap_and_or_children(not(A), not(ASwapped)) :-
+    swap_and_or_children(A, ASwapped).
+swap_and_or_children(and(A, B), Swapped) :-
+    swap_and_or_children(A, ASwapped),
+    swap_and_or_children(B, BSwapped),
+    maybe_swap_operands(and(ASwapped, BSwapped), Swapped).
+swap_and_or_children(or(A, B), Swapped) :-
+    swap_and_or_children(A, ASwapped),
+    swap_and_or_children(B, BSwapped),
+    maybe_swap_operands(or(ASwapped, BSwapped), Swapped).
+swap_and_or_children(imp(A, B), imp(ASwapped, BSwapped)) :-
+    swap_and_or_children(A, ASwapped),
+    swap_and_or_children(B, BSwapped).
+swap_and_or_children(iff(A, B), iff(ASwapped, BSwapped)) :-
+    swap_and_or_children(A, ASwapped),
+    swap_and_or_children(B, BSwapped).
+
+requires_extra_transform(Formula) :-
+    compound_formula(Formula),
+    top_operator(Formula, Op),
+    member(Op, [imp, iff, not]).
+
+answer_transform_once(Formula, Result) :-
+    once(mutate_once_with_info(Formula, Mutated, _)),
+    swap_and_or_children(Mutated, Swapped),
+    (
+        requires_extra_transform(Swapped)
+    ->
+        once(mutate_once_with_info(Swapped, ExtraMutated, _)),
+        swap_and_or_children(ExtraMutated, Result)
+    ;
+        Result = Swapped
+    ).
+
+apply_answer_transform_cycles(Formula, Cycles, Result) :-
+    require_formula(Formula),
+    require_steps(Cycles),
+    apply_answer_transform_cycles_(Cycles, Formula, Result).
+
+apply_answer_transform_cycles_(0, Formula, Formula).
+apply_answer_transform_cycles_(Cycles, Formula, Result) :-
+    Cycles > 0,
+    answer_transform_once(Formula, Next),
+    NextCycles is Cycles - 1,
+    apply_answer_transform_cycles_(NextCycles, Next, Result).
+
 mutate_inside(and(A, B), and(AMut, B), descend(left, and), Trace) :-
     random_member(Side, [left, right]),
     Side == left,

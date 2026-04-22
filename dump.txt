@@ -2,9 +2,9 @@
   "build_ex_depth": {
     "original_formula": {
       "formula": {
-        "type": "imp",
+        "type": "or",
         "left": {
-          "type": "and",
+          "type": "iff",
           "left": {
             "type": "var",
             "name": "s"
@@ -15,14 +15,14 @@
           }
         },
         "right": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "t"
+            "name": "p"
           },
           "right": {
             "type": "var",
-            "name": "p"
+            "name": "t"
           }
         }
       },
@@ -34,35 +34,32 @@
       ],
       "depth": 2,
       "size": 7,
-      "formula_prolog": "imp(and(s,q),imp(t,p))",
+      "formula_prolog": "or(iff(s,q),and(p,t))",
       "label": "formula originale"
     },
     "modified_formula": {
       "formula": {
-        "type": "imp",
+        "type": "or",
         "left": {
           "type": "and",
           "left": {
             "type": "var",
-            "name": "s"
-          },
-          "right": {
-            "type": "var",
-            "name": "q"
-          }
-        },
-        "right": {
-          "type": "or",
-          "left": {
-            "type": "not",
-            "expr": {
-              "type": "var",
-              "name": "t"
-            }
+            "name": "t"
           },
           "right": {
             "type": "var",
             "name": "p"
+          }
+        },
+        "right": {
+          "type": "iff",
+          "left": {
+            "type": "var",
+            "name": "q"
+          },
+          "right": {
+            "type": "var",
+            "name": "s"
           }
         }
       },
@@ -72,9 +69,9 @@
         "s",
         "t"
       ],
-      "depth": 3,
-      "size": 8,
-      "formula_prolog": "imp(and(s,q),or(not(t),p))",
+      "depth": 2,
+      "size": 7,
+      "formula_prolog": "or(and(t,p),iff(q,s))",
       "label": "formula modificata",
       "steps": 1
     },
@@ -86,13 +83,14 @@
     ],
     "depth": 2,
     "size": 7,
+    "atom_count": 4,
     "max_steps": 2,
     "rewrite_steps": 1,
     "source": "prolog_builder",
     "question": {
-      "type": "imp",
+      "type": "or",
       "left": {
-        "type": "and",
+        "type": "iff",
         "left": {
           "type": "var",
           "name": "s"
@@ -103,7 +101,22 @@
         }
       },
       "right": {
-        "type": "imp",
+        "type": "and",
+        "left": {
+          "type": "var",
+          "name": "p"
+        },
+        "right": {
+          "type": "var",
+          "name": "t"
+        }
+      }
+    },
+    "question_prolog": "or(iff(s,q),and(p,t))",
+    "correct_answer": {
+      "type": "or",
+      "left": {
+        "type": "and",
         "left": {
           "type": "var",
           "name": "t"
@@ -112,93 +125,25 @@
           "type": "var",
           "name": "p"
         }
-      }
-    },
-    "question_prolog": "imp(and(s,q),imp(t,p))",
-    "correct_answer": {
-      "type": "imp",
-      "left": {
-        "type": "and",
-        "left": {
-          "type": "var",
-          "name": "s"
-        },
-        "right": {
-          "type": "var",
-          "name": "q"
-        }
       },
       "right": {
-        "type": "or",
+        "type": "iff",
         "left": {
-          "type": "not",
-          "expr": {
-            "type": "var",
-            "name": "t"
-          }
+          "type": "var",
+          "name": "q"
         },
         "right": {
           "type": "var",
-          "name": "p"
+          "name": "s"
         }
       }
     },
-    "correct_answer_prolog": "imp(and(s,q),or(not(t),p))",
+    "correct_answer_prolog": "or(and(t,p),iff(q,s))",
     "wrong_answers": [
-      {
-        "type": "and",
-        "left": {
-          "type": "and",
-          "left": {
-            "type": "var",
-            "name": "s"
-          },
-          "right": {
-            "type": "var",
-            "name": "q"
-          }
-        },
-        "right": {
-          "type": "imp",
-          "left": {
-            "type": "var",
-            "name": "t"
-          },
-          "right": {
-            "type": "var",
-            "name": "p"
-          }
-        }
-      },
-      {
-        "type": "or",
-        "left": {
-          "type": "and",
-          "left": {
-            "type": "var",
-            "name": "s"
-          },
-          "right": {
-            "type": "var",
-            "name": "q"
-          }
-        },
-        "right": {
-          "type": "imp",
-          "left": {
-            "type": "var",
-            "name": "t"
-          },
-          "right": {
-            "type": "var",
-            "name": "p"
-          }
-        }
-      },
       {
         "type": "imp",
         "left": {
-          "type": "or",
+          "type": "iff",
           "left": {
             "type": "var",
             "name": "s"
@@ -209,28 +154,78 @@
           }
         },
         "right": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "t"
+            "name": "p"
           },
           "right": {
             "type": "var",
+            "name": "t"
+          }
+        }
+      },
+      {
+        "type": "or",
+        "left": {
+          "type": "and",
+          "left": {
+            "type": "var",
+            "name": "s"
+          },
+          "right": {
+            "type": "var",
+            "name": "q"
+          }
+        },
+        "right": {
+          "type": "and",
+          "left": {
+            "type": "var",
             "name": "p"
+          },
+          "right": {
+            "type": "var",
+            "name": "t"
+          }
+        }
+      },
+      {
+        "type": "and",
+        "left": {
+          "type": "iff",
+          "left": {
+            "type": "var",
+            "name": "s"
+          },
+          "right": {
+            "type": "var",
+            "name": "q"
+          }
+        },
+        "right": {
+          "type": "and",
+          "left": {
+            "type": "var",
+            "name": "p"
+          },
+          "right": {
+            "type": "var",
+            "name": "t"
           }
         }
       }
     ],
     "wrong_answers_prolog": [
-      "and(and(s,q),imp(t,p))",
-      "or(and(s,q),imp(t,p))",
-      "imp(or(s,q),imp(t,p))"
+      "imp(iff(s,q),and(p,t))",
+      "or(and(s,q),and(p,t))",
+      "and(iff(s,q),and(p,t))"
     ],
     "distraction_1": {
       "formula": {
-        "type": "and",
+        "type": "imp",
         "left": {
-          "type": "and",
+          "type": "iff",
           "left": {
             "type": "var",
             "name": "s"
@@ -241,14 +236,14 @@
           }
         },
         "right": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "t"
+            "name": "p"
           },
           "right": {
             "type": "var",
-            "name": "p"
+            "name": "t"
           }
         }
       },
@@ -260,7 +255,7 @@
       ],
       "depth": 2,
       "size": 7,
-      "formula_prolog": "and(and(s,q),imp(t,p))",
+      "formula_prolog": "imp(iff(s,q),and(p,t))",
       "label": "formula distrazione n1"
     },
     "distraction_2": {
@@ -278,14 +273,14 @@
           }
         },
         "right": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "t"
+            "name": "p"
           },
           "right": {
             "type": "var",
-            "name": "p"
+            "name": "t"
           }
         }
       },
@@ -297,14 +292,14 @@
       ],
       "depth": 2,
       "size": 7,
-      "formula_prolog": "or(and(s,q),imp(t,p))",
+      "formula_prolog": "or(and(s,q),and(p,t))",
       "label": "formula distrazione n2"
     },
     "distraction_3": {
       "formula": {
-        "type": "imp",
+        "type": "and",
         "left": {
-          "type": "or",
+          "type": "iff",
           "left": {
             "type": "var",
             "name": "s"
@@ -315,14 +310,14 @@
           }
         },
         "right": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "t"
+            "name": "p"
           },
           "right": {
             "type": "var",
-            "name": "p"
+            "name": "t"
           }
         }
       },
@@ -334,7 +329,7 @@
       ],
       "depth": 2,
       "size": 7,
-      "formula_prolog": "imp(or(s,q),imp(t,p))",
+      "formula_prolog": "and(iff(s,q),and(p,t))",
       "label": "formula distrazione n3"
     }
   },
@@ -350,36 +345,36 @@
       "s"
     ],
     "information": [
-      "p-true",
-      "q-false",
-      "r-true",
-      "s-true"
+      "p-false",
+      "q-true",
+      "r-false",
+      "s-false"
     ],
     "options": [
       {
         "formula": {
-          "type": "or",
+          "type": "and",
           "left": {
             "type": "and",
             "left": {
-              "type": "var",
-              "name": "s"
-            },
-            "right": {
-              "type": "var",
-              "name": "q"
-            }
-          },
-          "right": {
-            "type": "imp",
-            "left": {
-              "type": "var",
-              "name": "p"
+              "type": "imp",
+              "left": {
+                "type": "var",
+                "name": "s"
+              },
+              "right": {
+                "type": "var",
+                "name": "q"
+              }
             },
             "right": {
               "type": "var",
               "name": "r"
             }
+          },
+          "right": {
+            "type": "var",
+            "name": "p"
           }
         },
         "variables": [
@@ -388,44 +383,68 @@
           "r",
           "s"
         ],
-        "depth": 2,
+        "depth": 3,
         "size": 7,
-        "formula_prolog": "or(and(s,q),imp(p,r))",
-        "label": "opzione vera n1",
-        "is_true": true
-      },
-      {
-        "formula": {
-          "type": "var",
-          "name": "s"
-        },
-        "variables": [
-          "s"
-        ],
-        "depth": 0,
-        "size": 1,
-        "formula_prolog": "s",
-        "label": "opzione vera n2",
-        "is_true": true
+        "formula_prolog": "and(and(imp(s,q),r),p)",
+        "label": "opzione falsa n1",
+        "is_true": false
       },
       {
         "formula": {
           "type": "and",
           "left": {
-            "type": "var",
-            "name": "q"
-          },
-          "right": {
             "type": "and",
             "left": {
               "type": "iff",
               "left": {
                 "type": "var",
-                "name": "p"
+                "name": "s"
               },
               "right": {
                 "type": "var",
+                "name": "q"
+              }
+            },
+            "right": {
+              "type": "var",
+              "name": "r"
+            }
+          },
+          "right": {
+            "type": "var",
+            "name": "p"
+          }
+        },
+        "variables": [
+          "p",
+          "q",
+          "r",
+          "s"
+        ],
+        "depth": 3,
+        "size": 7,
+        "formula_prolog": "and(and(iff(s,q),r),p)",
+        "label": "opzione falsa n2",
+        "is_true": false
+      },
+      {
+        "formula": {
+          "type": "or",
+          "left": {
+            "type": "var",
+            "name": "q"
+          },
+          "right": {
+            "type": "or",
+            "left": {
+              "type": "and",
+              "left": {
+                "type": "var",
                 "name": "r"
+              },
+              "right": {
+                "type": "var",
+                "name": "p"
               }
             },
             "right": {
@@ -442,33 +461,33 @@
         ],
         "depth": 3,
         "size": 7,
-        "formula_prolog": "and(q,and(iff(p,r),s))",
-        "label": "opzione falsa n1",
-        "is_true": false
+        "formula_prolog": "or(q,or(and(r,p),s))",
+        "label": "opzione vera n1",
+        "is_true": true
       },
       {
         "formula": {
-          "type": "and",
+          "type": "imp",
           "left": {
-            "type": "imp",
+            "type": "and",
             "left": {
               "type": "var",
-              "name": "r"
+              "name": "p"
             },
             "right": {
               "type": "var",
-              "name": "s"
+              "name": "r"
             }
           },
           "right": {
-            "type": "and",
+            "type": "imp",
             "left": {
               "type": "var",
               "name": "q"
             },
             "right": {
               "type": "var",
-              "name": "p"
+              "name": "s"
             }
           }
         },
@@ -480,9 +499,9 @@
         ],
         "depth": 2,
         "size": 7,
-        "formula_prolog": "and(imp(r,s),and(q,p))",
-        "label": "opzione falsa n2",
-        "is_true": false
+        "formula_prolog": "imp(and(p,r),imp(q,s))",
+        "label": "opzione vera n2",
+        "is_true": true
       }
     ],
     "true_options": [
@@ -490,18 +509,45 @@
         "formula": {
           "type": "or",
           "left": {
-            "type": "and",
+            "type": "var",
+            "name": "q"
+          },
+          "right": {
+            "type": "or",
             "left": {
-              "type": "var",
-              "name": "s"
+              "type": "and",
+              "left": {
+                "type": "var",
+                "name": "r"
+              },
+              "right": {
+                "type": "var",
+                "name": "p"
+              }
             },
             "right": {
               "type": "var",
-              "name": "q"
+              "name": "s"
             }
-          },
-          "right": {
-            "type": "imp",
+          }
+        },
+        "variables": [
+          "p",
+          "q",
+          "r",
+          "s"
+        ],
+        "depth": 3,
+        "size": 7,
+        "formula_prolog": "or(q,or(and(r,p),s))",
+        "label": "opzione vera n1",
+        "is_true": true
+      },
+      {
+        "formula": {
+          "type": "imp",
+          "left": {
+            "type": "and",
             "left": {
               "type": "var",
               "name": "p"
@@ -509,6 +555,17 @@
             "right": {
               "type": "var",
               "name": "r"
+            }
+          },
+          "right": {
+            "type": "imp",
+            "left": {
+              "type": "var",
+              "name": "q"
+            },
+            "right": {
+              "type": "var",
+              "name": "s"
             }
           }
         },
@@ -520,21 +577,7 @@
         ],
         "depth": 2,
         "size": 7,
-        "formula_prolog": "or(and(s,q),imp(p,r))",
-        "label": "opzione vera n1",
-        "is_true": true
-      },
-      {
-        "formula": {
-          "type": "var",
-          "name": "s"
-        },
-        "variables": [
-          "s"
-        ],
-        "depth": 0,
-        "size": 1,
-        "formula_prolog": "s",
+        "formula_prolog": "imp(and(p,r),imp(q,s))",
         "label": "opzione vera n2",
         "is_true": true
       }
@@ -544,26 +587,26 @@
         "formula": {
           "type": "and",
           "left": {
-            "type": "var",
-            "name": "q"
-          },
-          "right": {
             "type": "and",
             "left": {
-              "type": "iff",
+              "type": "imp",
               "left": {
                 "type": "var",
-                "name": "p"
+                "name": "s"
               },
               "right": {
                 "type": "var",
-                "name": "r"
+                "name": "q"
               }
             },
             "right": {
               "type": "var",
-              "name": "s"
+              "name": "r"
             }
+          },
+          "right": {
+            "type": "var",
+            "name": "p"
           }
         },
         "variables": [
@@ -574,7 +617,7 @@
         ],
         "depth": 3,
         "size": 7,
-        "formula_prolog": "and(q,and(iff(p,r),s))",
+        "formula_prolog": "and(and(imp(s,q),r),p)",
         "label": "opzione falsa n1",
         "is_true": false
       },
@@ -582,26 +625,26 @@
         "formula": {
           "type": "and",
           "left": {
-            "type": "imp",
+            "type": "and",
             "left": {
-              "type": "var",
-              "name": "r"
+              "type": "iff",
+              "left": {
+                "type": "var",
+                "name": "s"
+              },
+              "right": {
+                "type": "var",
+                "name": "q"
+              }
             },
             "right": {
               "type": "var",
-              "name": "s"
+              "name": "r"
             }
           },
           "right": {
-            "type": "and",
-            "left": {
-              "type": "var",
-              "name": "q"
-            },
-            "right": {
-              "type": "var",
-              "name": "p"
-            }
+            "type": "var",
+            "name": "p"
           }
         },
         "variables": [
@@ -610,9 +653,9 @@
           "r",
           "s"
         ],
-        "depth": 2,
+        "depth": 3,
         "size": 7,
-        "formula_prolog": "and(imp(r,s),and(q,p))",
+        "formula_prolog": "and(and(iff(s,q),r),p)",
         "label": "opzione falsa n2",
         "is_true": false
       }
@@ -620,28 +663,28 @@
     "source": "prolog_assignment_and_eval",
     "option_1": {
       "formula": {
-        "type": "or",
+        "type": "and",
         "left": {
           "type": "and",
           "left": {
-            "type": "var",
-            "name": "s"
-          },
-          "right": {
-            "type": "var",
-            "name": "q"
-          }
-        },
-        "right": {
-          "type": "imp",
-          "left": {
-            "type": "var",
-            "name": "p"
+            "type": "imp",
+            "left": {
+              "type": "var",
+              "name": "s"
+            },
+            "right": {
+              "type": "var",
+              "name": "q"
+            }
           },
           "right": {
             "type": "var",
             "name": "r"
           }
+        },
+        "right": {
+          "type": "var",
+          "name": "p"
         }
       },
       "variables": [
@@ -650,44 +693,68 @@
         "r",
         "s"
       ],
-      "depth": 2,
+      "depth": 3,
       "size": 7,
-      "formula_prolog": "or(and(s,q),imp(p,r))",
-      "label": "opzione vera n1",
-      "is_true": true
+      "formula_prolog": "and(and(imp(s,q),r),p)",
+      "label": "opzione falsa n1",
+      "is_true": false
     },
     "option_2": {
       "formula": {
-        "type": "var",
-        "name": "s"
-      },
-      "variables": [
-        "s"
-      ],
-      "depth": 0,
-      "size": 1,
-      "formula_prolog": "s",
-      "label": "opzione vera n2",
-      "is_true": true
-    },
-    "option_3": {
-      "formula": {
         "type": "and",
         "left": {
-          "type": "var",
-          "name": "q"
-        },
-        "right": {
           "type": "and",
           "left": {
             "type": "iff",
             "left": {
               "type": "var",
-              "name": "p"
+              "name": "s"
             },
             "right": {
               "type": "var",
+              "name": "q"
+            }
+          },
+          "right": {
+            "type": "var",
+            "name": "r"
+          }
+        },
+        "right": {
+          "type": "var",
+          "name": "p"
+        }
+      },
+      "variables": [
+        "p",
+        "q",
+        "r",
+        "s"
+      ],
+      "depth": 3,
+      "size": 7,
+      "formula_prolog": "and(and(iff(s,q),r),p)",
+      "label": "opzione falsa n2",
+      "is_true": false
+    },
+    "option_3": {
+      "formula": {
+        "type": "or",
+        "left": {
+          "type": "var",
+          "name": "q"
+        },
+        "right": {
+          "type": "or",
+          "left": {
+            "type": "and",
+            "left": {
+              "type": "var",
               "name": "r"
+            },
+            "right": {
+              "type": "var",
+              "name": "p"
             }
           },
           "right": {
@@ -704,33 +771,33 @@
       ],
       "depth": 3,
       "size": 7,
-      "formula_prolog": "and(q,and(iff(p,r),s))",
-      "label": "opzione falsa n1",
-      "is_true": false
+      "formula_prolog": "or(q,or(and(r,p),s))",
+      "label": "opzione vera n1",
+      "is_true": true
     },
     "option_4": {
       "formula": {
-        "type": "and",
+        "type": "imp",
         "left": {
-          "type": "imp",
+          "type": "and",
           "left": {
             "type": "var",
-            "name": "r"
+            "name": "p"
           },
           "right": {
             "type": "var",
-            "name": "s"
+            "name": "r"
           }
         },
         "right": {
-          "type": "and",
+          "type": "imp",
           "left": {
             "type": "var",
             "name": "q"
           },
           "right": {
             "type": "var",
-            "name": "p"
+            "name": "s"
           }
         }
       },
@@ -742,9 +809,9 @@
       ],
       "depth": 2,
       "size": 7,
-      "formula_prolog": "and(imp(r,s),and(q,p))",
-      "label": "opzione falsa n2",
-      "is_true": false
+      "formula_prolog": "imp(and(p,r),imp(q,s))",
+      "label": "opzione vera n2",
+      "is_true": true
     }
   }
 }
