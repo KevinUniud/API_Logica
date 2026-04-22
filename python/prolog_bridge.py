@@ -985,6 +985,14 @@ class PrologBridge:
         goal = f"one_step_distraction({formula}, Out)"
         return _ensure_list_result(self._findall_terms(goal, key="formulas", timeout=timeout), "formulas")
 
+    def apply_operator_cycles(self, expr, cycles: int, timeout: int = 10):
+        """Wrapper bridge per la routine Prolog: apply_operator_cycles."""
+        _req_int_ge("cycles", cycles, 0)
+        _req_int_ge("timeout", timeout, 1)
+        formula = to_prolog(expr) if not isinstance(expr, str) else expr
+        goal = f"apply_operator_cycles({formula}, {cycles}, Out)"
+        return _ensure_list_result(self._findall_terms(goal, key="formulas", timeout=timeout), "formulas")
+
     def one_step_neq(self, expr, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: one_step_neq."""
         _req_int_ge("timeout", timeout, 1)

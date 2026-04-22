@@ -6,7 +6,7 @@ import math
 import random
 import time
 # Tipi usati nelle firme pubbliche e nei callback interni.
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 # Nodi AST logici per trasformazioni e riscritture locali.
 from ast_logic import And, Iff, Imp, Not, Or, Var
@@ -43,7 +43,7 @@ def _default_vars(predicate_count: int) -> list[str]:
     if predicate_count <= len(DEFAULT_VARIABLES):
         return list(DEFAULT_VARIABLES[:predicate_count])
 
-    variables = list(DEFAULT_VARIABLES)
+    variables: list[str] = list(DEFAULT_VARIABLES)
     next_index = 1
     while len(variables) < predicate_count:
         variables.append(f"p{next_index}")
@@ -284,14 +284,14 @@ def _get_formulas(
             formulas = bridge.all_depth(depth, list(variables), timeout=timeout)
     else:
         formulas: list[str] = []
+        per_head_limit = 4
+        per_head_timeout = 1
+        head_sampling_budget = max(1.0, min(float(timeout), 3.0))
+        started = time.monotonic()
 
         # 1) Privilegia prima il campionamento per head, cosi da non fissarsi
         # sul prefisso iniziale dell'enumerazione Prolog (spesso tutto 'and').
         if hasattr(bridge, "some_depth_head"):
-            per_head_limit = 4
-            per_head_timeout = 1
-            head_sampling_budget = max(1.0, min(float(timeout), 3.0))
-            started = time.monotonic()
             heads = list(FORMULA_HEADS)
             rng.shuffle(heads)
             for head in heads:
@@ -395,6 +395,17 @@ def formula_size(expr) -> int:
     raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
 
 
+def formula_atom_count(expr) -> int:
+    """Calcola il numero di atomi presenti in una formula logica."""
+    if hasattr(expr, "name") and not hasattr(expr, "expr") and not hasattr(expr, "left"):
+        return 1
+    if hasattr(expr, "expr"):
+        return formula_atom_count(expr.expr)
+    if hasattr(expr, "left") and hasattr(expr, "right"):
+        return formula_atom_count(expr.left) + formula_atom_count(expr.right)
+    raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
+
+
 def formula_metadata(expr) -> dict:
     """Costruisce i metadati (variabili/profondita/dimensione/prolog) di una formula."""
     data = {
@@ -421,6 +432,18 @@ def formula_payload(expr, **extra) -> dict:
 def _ensure_bridge(bridge: PrologBridge | None = None) -> PrologBridge:
     """Restituisce il bridge fornito o crea pigramente quello di default."""
     return bridge or get_default_bridge()
+
+
+def _operator_cycle_count(formula: Any, rng: random.Random, max_cycles: int | None = None) -> int:
+    """Sceglie un numero di cicli compreso tra meta e massimo degli atomi disponibili."""
+    atom_count = formula_atom_count(_as_ast(formula))
+    if atom_count <= 0:
+        return 0
+
+    upper_bound = atom_count if max_cycles is None else min(atom_count, max_cycles)
+    upper_bound = max(1, upper_bound)
+    lower_bound = max(1, math.ceil(upper_bound / 2))
+    return rng.randint(lower_bound, upper_bound)
 
 
 def _as_prolog(expr: Any) -> str:
@@ -566,6 +589,7 @@ def _pick_wrongs(
     variables,
     wrong_answers_count: int,
     max_steps: int,
+    operator_cycles: int | None,
     bridge: PrologBridge,
     filter_wrong_batch: Callable[[Sequence[str]], list[str]],
     seed: int | None = None,
@@ -595,8 +619,33 @@ def _pick_wrongs(
         if not unseen:
             return False
 
-        seen.update(unseen)
-        wrong_candidates = filter_wrong_batch(unseen)
+        expanded = list(unseen)
+        if operator_cycles != 0:
+            apply_cycles = getattr(bridge, "apply_operator_cycles", None)
+            if callable(apply_cycles):
+                cycle_fn = cast(Callable[..., list[str]], apply_cycles)
+                for candidate in unseen:
+                    candidate_cycles = _operator_cycle_count(candidate, rng, operator_cycles)
+                    if candidate_cycles <= 0:
+                        continue
+                    enriched_candidates = safe_call(
+                        cycle_fn,
+                        candidate,
+                        cycles=candidate_cycles,
+                        timeout=current_timeout(),
+                    )
+                    for enriched in enriched_candidates:
+                        if (
+                            enriched
+                            and enriched not in seen
+                            and _uses_vars(enriched, variables)
+                        ):
+                            expanded.append(enriched)
+
+        expanded = list(dict.fromkeys(expanded))
+
+        seen.update(expanded)
+        wrong_candidates = filter_wrong_batch(expanded)
         for candidate in wrong_candidates:
             collected.append(candidate)
 
@@ -604,11 +653,12 @@ def _pick_wrongs(
                 return True
         return False
 
-    def safe_call(fn, *args, **kwargs):
+    def safe_call(fn: Callable[..., object], *args, **kwargs) -> list[str]:
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
         except Exception:
             return []
+        return result if isinstance(result, list) else []
 
     # 1. Sorgenti deterministiche / elenco
     deterministic_sources: list[Callable[[], list[str]]] = []
@@ -682,6 +732,7 @@ def build_tvq(
     false_options_count: int,
     timeout: int = 10,
     seed: int | None = None,
+    operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
 ) -> dict:
     """Costruisce una domanda vero/falso da informazioni sui predicati."""
@@ -691,6 +742,8 @@ def build_tvq(
         raise ValueError("true_options_count deve essere >= 1")
     if false_options_count < 1:
         raise ValueError("false_options_count deve essere >= 1")
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
 
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
@@ -723,9 +776,26 @@ def build_tvq(
         seen_candidates.add(formula)
         candidates.append(formula)
 
+    def register_with_operator_cycles(formula: str) -> None:
+        register_candidate(formula)
+        if operator_cycles == 0:
+            return
+        try:
+            cycle_count = _operator_cycle_count(formula, rng, operator_cycles)
+            enriched_candidates = bridge.apply_operator_cycles(
+                formula,
+                cycles=cycle_count,
+                timeout=remaining_timeout(2),
+            )
+        except Exception:
+            return
+
+        for enriched in enriched_candidates:
+            register_candidate(enriched)
+
     for variable in variables:
         register_candidate(variable)
-        register_candidate(f"not({variable})")
+        register_with_operator_cycles(f"not({variable})")
 
     search_depth = max(2, _depth_from_var_count(predicate_count) + 2)
     target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
@@ -812,6 +882,7 @@ def build_exercise(
     expr,
     wrong_answers_count: int = 3,
     max_steps: int = 2,
+    operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
     seed: int | None = None,
     timeout: int = 10,
@@ -819,6 +890,8 @@ def build_exercise(
     """Costruisce un esercizio con formula originale, modificata e distrazioni."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     _req_int_ge("max_steps", max_steps, 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
     bridge = _ensure_bridge(bridge)
 
@@ -907,6 +980,7 @@ def build_exercise(
         variables=variables,
         wrong_answers_count=wrong_answers_count,
         max_steps=max_steps,
+        operator_cycles=operator_cycles,
         bridge=bridge,
         filter_wrong_batch=filter_wrong_batch,
         seed=seed,
@@ -959,11 +1033,14 @@ def build_ex_depth(
     seed: int | None = None,
     wrong_answers_count: int = 3,
     max_steps: int = 2,
+    operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
 ) -> dict:
     """Costruisce un esercizio a partire da profondita e vincoli sulle variabili."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     _req_int_ge("max_steps", max_steps, 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
@@ -1006,6 +1083,7 @@ def build_ex_depth(
                 seed=seed,
                 wrong_answers_count=wrong_answers_count,
                 max_steps=max_steps,
+                operator_cycles=operator_cycles,
                 timeout=remaining_timeout(total_timeout),
             )
         except RuntimeError as exc:
@@ -1023,12 +1101,15 @@ def build_ex_json(
     seed: int | None = None,
     wrong_answers_count: int = 3,
     max_steps: int = 2,
+    operator_cycles: int | None = None,
     timeout: int = 10,
 ) -> str:
     """Serializza l output di build_exercise come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     _req_int_ge("max_steps", max_steps, 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
     return json.dumps(
         build_exercise(
             expr=expr,
@@ -1036,6 +1117,7 @@ def build_ex_json(
             seed=seed,
             wrong_answers_count=wrong_answers_count,
             max_steps=max_steps,
+            operator_cycles=operator_cycles,
             timeout=timeout,
         ),
         ensure_ascii=False,
@@ -1051,12 +1133,15 @@ def build_ex_depth_json(
     seed: int | None = None,
     wrong_answers_count: int = 3,
     max_steps: int = 2,
+    operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
 ) -> str:
     """Serializza l output di build_ex_depth come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     _req_int_ge("max_steps", max_steps, 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
     return json.dumps(
         build_ex_depth(
             depth=depth,
@@ -1066,6 +1151,7 @@ def build_ex_depth_json(
             seed=seed,
             wrong_answers_count=wrong_answers_count,
             max_steps=max_steps,
+            operator_cycles=operator_cycles,
             bridge=bridge,
         ),
         ensure_ascii=False,
@@ -1079,6 +1165,7 @@ def build_tvq_json(
     false_options_count: int,
     timeout: int = 10,
     seed: int | None = None,
+    operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
 ) -> str:
     """Serializza l output di build_tvq come stringa JSON formattata."""
@@ -1086,6 +1173,8 @@ def build_tvq_json(
     _req_int_ge("timeout", int(timeout), 1)
     _req_int_ge("true_options_count", true_options_count, 1)
     _req_int_ge("false_options_count", false_options_count, 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
     return json.dumps(
         build_tvq(
             predicate_count=predicate_count,
@@ -1093,6 +1182,7 @@ def build_tvq_json(
             false_options_count=false_options_count,
             timeout=timeout,
             seed=seed,
+            operator_cycles=operator_cycles,
             bridge=bridge,
         ),
         ensure_ascii=False,

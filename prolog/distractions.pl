@@ -204,6 +204,10 @@ random_replacement_operator(OldOp, NewOp) :-
     member(NewOp, [imp, and, or, not]),
     NewOp \= OldOp.
 
+random_replacement_operator_once(OldOp, NewOp) :-
+    findall(Op, (member(Op, [imp, and, or, not]), Op \= OldOp), Candidates),
+    random_member(NewOp, Candidates).
+
 
 % - maybe_mutate_here
 % Predicato non deterministico: permette sia di mutare nel nodo corrente
@@ -234,6 +238,58 @@ mutate_once_with_info(Atom, Mutated, mutate(atom, var, OpTo, Atom, Mutated)) :-
     atomic(Atom),
     random_member(OpTo, [not, and, or, imp]),
     wrap_atomic_with_operator(Atom, OpTo, Mutated).
+
+% recursively_change_operators(+Formula, -Mutated)
+% Cambia ricorsivamente gli operatori su tutta la formula.
+% Gli atomi restano invariati.
+recursively_change_operators(Atom, Atom) :-
+    atomic(Atom),
+    !.
+
+recursively_change_operators(not(A), Mutated) :-
+    recursively_change_operators(A, AMut),
+    random_replacement_operator_once(not, OpTo),
+    replace_top_operator(not(AMut), OpTo, Mutated).
+
+recursively_change_operators(and(A, B), Mutated) :-
+    recursively_change_operators(A, AMut),
+    recursively_change_operators(B, BMut),
+    random_replacement_operator_once(and, OpTo),
+    replace_top_operator(and(AMut, BMut), OpTo, Mutated).
+
+recursively_change_operators(or(A, B), Mutated) :-
+    recursively_change_operators(A, AMut),
+    recursively_change_operators(B, BMut),
+    random_replacement_operator_once(or, OpTo),
+    replace_top_operator(or(AMut, BMut), OpTo, Mutated).
+
+recursively_change_operators(imp(A, B), Mutated) :-
+    recursively_change_operators(A, AMut),
+    recursively_change_operators(B, BMut),
+    random_replacement_operator_once(imp, OpTo),
+    replace_top_operator(imp(AMut, BMut), OpTo, Mutated).
+
+recursively_change_operators(iff(A, B), Mutated) :-
+    recursively_change_operators(A, AMut),
+    recursively_change_operators(B, BMut),
+    random_replacement_operator_once(iff, OpTo),
+    replace_top_operator(iff(AMut, BMut), OpTo, Mutated).
+
+% apply_operator_cycles(+Formula, +Cycles, -Result)
+% Per ogni ciclo applica una mutazione (inversione atomo inclusa)
+% seguita dal cambio ricorsivo di tutti gli operatori.
+apply_operator_cycles(Formula, Cycles, Result) :-
+    require_formula(Formula),
+    require_steps(Cycles),
+    apply_operator_cycles_(Cycles, Formula, Result).
+
+apply_operator_cycles_(0, Formula, Formula).
+apply_operator_cycles_(Cycles, Formula, Result) :-
+    Cycles > 0,
+    once(mutate_once_with_info(Formula, Inverted, _)),
+    recursively_change_operators(Inverted, Changed),
+    NextCycles is Cycles - 1,
+    apply_operator_cycles_(NextCycles, Changed, Result).
 
 mutate_inside(and(A, B), and(AMut, B), descend(left, and), Trace) :-
     random_member(Side, [left, right]),
