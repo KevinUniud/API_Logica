@@ -15,12 +15,16 @@ from prolog_bridge import PrologBridge, collect_variables, formula_to_dict, from
 
 
 DEFAULT_VARIABLES = ("p", "q", "r", "s", "t")
+VAR_SET_LARGE = ("p", "q", "r", "s", "t")
+VAR_SET_SMALL = ("p", "q", "r", "s")
 DEFAULT_FORMULA_SAMPLE_LIMIT = 24
 DEFAULT_FORMULA_FETCH_MULTIPLIER = 8
 FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
 MAX_MODIFIED_EQUIV_CHECKS = 8
 DISTRACTION_CANDIDATE_MULTIPLIER = 4
 MAX_AUTOMATIC_TRANSFORM_CYCLES = 8
+MIN_NON_TRIVIAL_CORRECT_STEPS = 2
+DEFAULT_DISTRACTOR_MAX_STEPS = 2
 
 
 def _req_int_ge(name: str, value: int, minimum: int) -> None:
@@ -58,6 +62,21 @@ def _normalize_vars(variables: Sequence[str]) -> list[str]:
     if not normalized:
         raise ValueError("variables non può essere vuoto")
     return normalized
+
+
+def _select_random_var_set(
+    *,
+    rng: random.Random,
+    depth: int | None = None,
+) -> tuple[str, ...]:
+    """Seleziona casualmente un set variabili preconfigurato compatibile con la profondita."""
+    candidates = [VAR_SET_LARGE, VAR_SET_SMALL]
+    if depth is not None:
+        max_vars = _max_vars_for_depth(depth)
+        candidates = [item for item in candidates if len(item) <= max_vars]
+    if not candidates:
+        raise ValueError("La profondita richiesta non consente il set automatico di variabili")
+    return rng.choice(candidates)
 
 
 def _max_vars_for_depth(depth: int) -> int:
@@ -435,6 +454,15 @@ def _ensure_bridge(bridge: PrologBridge | None = None) -> PrologBridge:
     return bridge or get_default_bridge()
 
 
+def _safe_bridge_call(fn: Callable[..., object], *args, **kwargs) -> list[str]:
+    """Esegue una chiamata bridge restituendo sempre una lista o fallback vuoto."""
+    try:
+        result = fn(*args, **kwargs)
+    except Exception:
+        return []
+    return result if isinstance(result, list) else []
+
+
 def _operator_cycle_count(formula: Any, rng: random.Random, max_cycles: int | None = None) -> int:
     """Sceglie un numero di cicli compreso tra meta e massimo delle trasformazioni disponibili."""
     atom_count = formula_atom_count(_as_ast(formula))
@@ -471,7 +499,11 @@ def _has_atom_count(formula: Any, target_atom_count: int | None) -> bool:
 
 
 def _swap_and_or_rec(node: Any, rng: random.Random, swap_probability: float = 0.5) -> Any:
-    """Scambia casualmente i figli di and/or mantenendo intatto il resto della formula."""
+    """FALLBACK IMPLEMENTATION: Scambia casualmente i figli di and/or mantenendo intatto il resto della formula.
+    
+    Note: Prolog swap_and_or_children è preferito quando disponibile. Questa implementazione Python
+    esiste solo come fallback se il bridge Prolog non è disponibile o fallisce.
+    """
     if isinstance(node, Var):
         return node
     if isinstance(node, Not):
@@ -502,7 +534,11 @@ def _swap_and_or_rec(node: Any, rng: random.Random, swap_probability: float = 0.
 
 
 def _maybe_swap_and_or(formula: str, rng: random.Random, swap_probability: float = 0.5) -> str:
-    """Applica opzionalmente swap ai nodi and/or della formula."""
+    """FALLBACK IMPLEMENTATION: Applica opzionalmente swap ai nodi and/or della formula.
+    
+    Note: Prolog swap_and_or_children è preferito quando disponibile via _transform_answer_candidates.
+    Questa implementazione Python esiste solo come fallback se il bridge Prolog non è disponibile.
+    """
     swapped = _swap_and_or_rec(_as_ast(formula), rng, swap_probability)
     return to_prolog(swapped)
 
@@ -510,6 +546,47 @@ def _maybe_swap_and_or(formula: str, rng: random.Random, swap_probability: float
 def _needs_extra_transformation(formula: str) -> bool:
     """Rileva se la formula richiede una trasformazione aggiuntiva."""
     return _formula_head(formula) in {"imp", "iff", "not"}
+
+
+def _canonicalize_commutative(node: Any) -> Any:
+    """Normalizza and/or/iff ordinando i figli per confronto strutturale."""
+    if isinstance(node, Var):
+        return node
+    if isinstance(node, Not):
+        return Not(_canonicalize_commutative(node.expr))
+    if isinstance(node, Imp):
+        return Imp(_canonicalize_commutative(node.left), _canonicalize_commutative(node.right))
+    if isinstance(node, And):
+        left = _canonicalize_commutative(node.left)
+        right = _canonicalize_commutative(node.right)
+        if to_prolog(right) < to_prolog(left):
+            left, right = right, left
+        return And(left, right)
+    if isinstance(node, Or):
+        left = _canonicalize_commutative(node.left)
+        right = _canonicalize_commutative(node.right)
+        if to_prolog(right) < to_prolog(left):
+            left, right = right, left
+        return Or(left, right)
+    if isinstance(node, Iff):
+        left = _canonicalize_commutative(node.left)
+        right = _canonicalize_commutative(node.right)
+        if to_prolog(right) < to_prolog(left):
+            left, right = right, left
+        return Iff(left, right)
+    return node
+
+
+def _is_effective_transformation(original: Any, candidate: Any) -> bool:
+    """Verifica che la differenza non sia solo riordinamento commutativo dei figli."""
+    original_text = _normalize_formula_text(original)
+    candidate_text = _normalize_formula_text(candidate)
+    if original_text == candidate_text:
+        return False
+
+    original_canonical = to_prolog(_canonicalize_commutative(_as_ast(original)))
+    candidate_canonical = to_prolog(_canonicalize_commutative(_as_ast(candidate)))
+    return original_canonical != candidate_canonical
 
 
 def _normalize_formula_text(formula: Any) -> str:
@@ -532,24 +609,38 @@ def _transform_answer_candidates(
     operator_cycles: int | None,
     timeout_provider: Callable[[], int],
 ) -> list[str]:
-    """Genera varianti risposta usando Prolog quando disponibile, con fallback Python."""
+    """Genera varianti risposta usando Prolog quando disponibile, con fallback Python.
+    
+    FLUSSO PRIMARIO (Prolog preferito):
+    1. Se bridge.apply_answer_transform_cycles disponibile: tenta di usare Prolog
+    2. Se successo: restituisce risultati Prolog
+    3. Se fallisce: passa a FLUSSO FALLBACK
+    
+    FLUSSO FALLBACK (Python):
+    1. Se nessun ciclo richiesto: restituisce [formula, swap_and_or(formula)]
+    2. Se bridge.apply_operator_cycles disponibile: usa Python swap + cicli Prolog
+    3. Applica extra trasformazioni se formula head è imp/iff/not
+    
+    In entrambi i casi: deduplicazione e normalizzazione finale.
+    """
     transformed: list[str] = []
+    
+    # PRIMARY PATH: Tentativo Prolog apply_answer_transform_cycles
     answer_cycles_fn = getattr(bridge, "apply_answer_transform_cycles", None)
     if callable(answer_cycles_fn):
         cycles = _operator_cycle_count(formula, rng, operator_cycles)
         if cycles > 0:
-            try:
-                transformed = cast(Callable[..., list[str]], answer_cycles_fn)(
-                    formula,
-                    cycles=cycles,
-                    timeout=timeout_provider(),
-                )
-            except Exception:
-                transformed = []
+            transformed = _safe_bridge_call(
+                cast(Callable[..., object], answer_cycles_fn),
+                formula,
+                cycles=cycles,
+                timeout=timeout_provider(),
+            )
 
     if transformed:
         return list(dict.fromkeys([formula] + transformed))
 
+    # FALLBACK PATH: Python swap + Prolog cycles (se disponibili)
     fallback = [formula, _maybe_swap_and_or(formula, rng)]
     if operator_cycles == 0:
         return list(dict.fromkeys(fallback))
@@ -563,27 +654,23 @@ def _transform_answer_candidates(
     if candidate_cycles <= 0:
         return list(dict.fromkeys(fallback))
 
-    try:
-        enriched_candidates = cycle_fn(
-            formula,
-            cycles=candidate_cycles,
-            timeout=timeout_provider(),
-        )
-    except Exception:
-        enriched_candidates = []
+    enriched_candidates = _safe_bridge_call(
+        cast(Callable[..., object], cycle_fn),
+        formula,
+        cycles=candidate_cycles,
+        timeout=timeout_provider(),
+    )
 
     for enriched in enriched_candidates:
         fallback.append(enriched)
         fallback.append(_maybe_swap_and_or(enriched, rng))
         if _needs_extra_transformation(enriched):
-            try:
-                extra_candidates = cycle_fn(
-                    enriched,
-                    cycles=1,
-                    timeout=timeout_provider(),
-                )
-            except Exception:
-                extra_candidates = []
+            extra_candidates = _safe_bridge_call(
+                cast(Callable[..., object], cycle_fn),
+                enriched,
+                cycles=1,
+                timeout=timeout_provider(),
+            )
             for extra in extra_candidates:
                 fallback.append(extra)
                 fallback.append(_maybe_swap_and_or(extra, rng))
@@ -656,8 +743,26 @@ def _pick_modified(
     seed: int | None = None,
     timeout: int = 10,
 ) -> tuple[str, int]:
-    """Seleziona una formula equivalente riscritta e stima i passi di rewrite."""
+    """Seleziona una formula equivalente con almeno due trasformazioni non banali."""
     rng = random.Random(seed)
+
+    def filter_candidates_batch(source: Sequence[str], seen: set[str]) -> list[str]:
+        """Filtra candidati con i vincoli comuni usati dai due percorsi di selezione."""
+        selected: list[str] = []
+        for candidate in source:
+            if not candidate or candidate == question_prolog or candidate in seen:
+                continue
+            if not _uses_vars(candidate, variables):
+                continue
+            if not _has_atom_count(candidate, target_atom_count):
+                continue
+            if not _is_effective_transformation(question_prolog, candidate):
+                continue
+            seen.add(candidate)
+            selected.append(candidate)
+            if len(selected) >= MAX_MODIFIED_EQUIV_CHECKS:
+                break
+        return selected
 
     def finalize_candidate(candidate: str, steps: int) -> tuple[str, int]:
         selected = _maybe_swap_and_or(candidate, rng)
@@ -673,6 +778,7 @@ def _pick_modified(
                 for item in extra_raw
                 if item
                 and item != question_prolog
+                and _is_effective_transformation(candidate, item)
                 and _uses_vars(item, variables)
                 and _has_atom_count(item, target_atom_count)
             ]
@@ -683,24 +789,28 @@ def _pick_modified(
                     selected_steps += 1
         return selected, selected_steps
 
+    def select_with_min_non_trivial(
+        candidates: Sequence[str],
+        base_steps: Callable[[int], int],
+    ) -> tuple[str, int] | None:
+        indexed = list(enumerate(candidates))
+        rng.shuffle(indexed)
+        for idx, candidate in indexed:
+            selected, selected_steps = finalize_candidate(candidate, base_steps(idx))
+            if selected_steps < MIN_NON_TRIVIAL_CORRECT_STEPS:
+                continue
+            if not _is_effective_transformation(question_prolog, selected):
+                continue
+            return selected, selected_steps
+        return None
+
     try:
         path = bridge.rewrite_path(question_prolog, timeout=timeout)
     except Exception:
         path = []
 
     seen: set[str] = set()
-    path_candidates: list[str] = []
-    for candidate in path:
-        if not candidate or candidate == question_prolog or candidate in seen:
-            continue
-        if not _uses_vars(candidate, variables):
-            continue
-        if not _has_atom_count(candidate, target_atom_count):
-            continue
-        seen.add(candidate)
-        path_candidates.append(candidate)
-        if len(path_candidates) >= MAX_MODIFIED_EQUIV_CHECKS:
-            break
+    path_candidates = filter_candidates_batch(path, seen)
 
     ordered_candidates: list[str] = []
     if path_candidates:
@@ -711,22 +821,12 @@ def _pick_modified(
             ordered_candidates = []
 
     if ordered_candidates:
-        selected_steps = rng.randint(1, len(ordered_candidates))
-        return finalize_candidate(ordered_candidates[selected_steps - 1], selected_steps)
+        selected = select_with_min_non_trivial(ordered_candidates, lambda idx: idx + 1)
+        if selected is not None:
+            return selected
 
-    candidates = bridge.rewrite_formula(question_prolog, timeout=timeout)
-    fallback_candidates: list[str] = []
-    for candidate in candidates:
-        if not candidate or candidate == question_prolog or candidate in seen:
-            continue
-        if not _uses_vars(candidate, variables):
-            continue
-        if not _has_atom_count(candidate, target_atom_count):
-            continue
-        seen.add(candidate)
-        fallback_candidates.append(candidate)
-        if len(fallback_candidates) >= MAX_MODIFIED_EQUIV_CHECKS:
-            break
+    fallback_raw = _safe_bridge_call(bridge.rewrite_formula, question_prolog, timeout=timeout)
+    fallback_candidates = filter_candidates_batch(fallback_raw, seen)
 
     equivalent_fallbacks: list[str] = []
     if fallback_candidates:
@@ -737,7 +837,9 @@ def _pick_modified(
             equivalent_fallbacks = []
 
     if equivalent_fallbacks:
-        return finalize_candidate(rng.choice(equivalent_fallbacks), 1)
+        selected = select_with_min_non_trivial(equivalent_fallbacks, lambda _idx: 1)
+        if selected is not None:
+            return selected
 
     raise RuntimeError("Nessuna formula modificata equivalente trovata")
 
@@ -748,7 +850,6 @@ def _pick_wrongs(
     variables,
     target_atom_count: int | None,
     wrong_answers_count: int,
-    max_steps: int,
     operator_cycles: int | None,
     from_correct_answer: bool,
     bridge: PrologBridge,
@@ -809,20 +910,13 @@ def _pick_wrongs(
                 return True
         return False
 
-    def safe_call(fn: Callable[..., object], *args, **kwargs) -> list[str]:
-        try:
-            result = fn(*args, **kwargs)
-        except Exception:
-            return []
-        return result if isinstance(result, list) else []
-
     # 1. Sorgenti deterministiche / elenco
     deterministic_sources: list[Callable[[], list[str]]] = []
 
     some_one_step = getattr(bridge, "some_step_neq", None)
     if callable(some_one_step):
         deterministic_sources.append(
-            lambda: safe_call(
+            lambda: _safe_bridge_call(
                 cast(Callable[..., object], some_one_step),
                 source_formula,
                 limit=candidate_limit,
@@ -831,7 +925,7 @@ def _pick_wrongs(
         )
     else:
         deterministic_sources.append(
-            lambda: safe_call(
+            lambda: _safe_bridge_call(
                 bridge.all_step_neq,
                 source_formula,
                 timeout=current_timeout(),
@@ -839,7 +933,7 @@ def _pick_wrongs(
         )
 
     deterministic_sources.append(
-        lambda: safe_call(
+        lambda: _safe_bridge_call(
             bridge.one_step_neq,
             source_formula,
             timeout=current_timeout(),
@@ -849,20 +943,20 @@ def _pick_wrongs(
     some_multi_step = getattr(bridge, "some_neq", None)
     if callable(some_multi_step):
         deterministic_sources.append(
-            lambda: safe_call(
+            lambda: _safe_bridge_call(
                 cast(Callable[..., object], some_multi_step),
                 source_formula,
-                max_steps=max_steps,
+                max_steps=DEFAULT_DISTRACTOR_MAX_STEPS,
                 limit=candidate_limit,
                 timeout=current_timeout(),
             )
         )
 
     deterministic_sources.append(
-        lambda: safe_call(
+        lambda: _safe_bridge_call(
             bridge.non_equivalent_distraction,
             source_formula,
-            max_steps=max_steps,
+            max_steps=DEFAULT_DISTRACTOR_MAX_STEPS,
             timeout=current_timeout(),
         )
     )
@@ -905,7 +999,14 @@ def build_tvq(
     rng = random.Random(seed)
     total_timeout = max(1, int(timeout))
     deadline = time.monotonic() + total_timeout
-    variables = _default_vars(predicate_count)
+
+    # Se predicate_count è 4 o 5, usa un set casuale; altrimenti genera dinamicamente
+    if predicate_count in (4, 5):
+        variables = list(_select_random_var_set(rng=rng))
+    else:
+        variables = _default_vars(predicate_count)
+
+    effective_predicate_count = len(variables)
     required_options = true_options_count + false_options_count
 
     def remaining_timeout(cap: int | None = None) -> int:
@@ -920,7 +1021,7 @@ def build_tvq(
     candidates: list[str] = []
     seen_candidates: set[str] = set()
     allowed_variables = set(variables)
-    target_atom_count = predicate_count
+    target_atom_count = effective_predicate_count
 
     def register_candidate(formula: str) -> None:
         if not formula or formula in seen_candidates:
@@ -950,7 +1051,7 @@ def build_tvq(
         register_candidate(variable)
         register_with_operator_cycles(f"not({variable})")
 
-    search_depth = max(2, _depth_from_var_count(predicate_count) + 2)
+    search_depth = max(2, _depth_from_var_count(effective_predicate_count) + 2)
     target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
 
     for depth in range(1, search_depth + 1):
@@ -1010,7 +1111,7 @@ def build_tvq(
 
         result = {
             "type": "truth_value_options_question",
-            "predicate_count": predicate_count,
+            "predicate_count": effective_predicate_count,
             "true_options_count": true_options_count,
             "false_options_count": false_options_count,
             "variables": variables,
@@ -1035,7 +1136,6 @@ def build_tvq(
 def build_exercise(
     expr,
     wrong_answers_count: int = 3,
-    max_steps: int = 2,
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
@@ -1044,7 +1144,6 @@ def build_exercise(
 ) -> dict:
     """Costruisce un esercizio con formula originale, modificata e distrazioni."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
-    _req_int_ge("max_steps", max_steps, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
@@ -1137,7 +1236,6 @@ def build_exercise(
         variables=variables,
         target_atom_count=question_atom_count,
         wrong_answers_count=wrong_answers_count,
-        max_steps=max_steps,
         operator_cycles=operator_cycles,
         from_correct_answer=wrong_from_correct,
         bridge=bridge,
@@ -1170,7 +1268,6 @@ def build_exercise(
         "depth": formula_depth(question_expr),
         "size": formula_size(question_expr),
         "atom_count": question_atom_count,
-        "max_steps": max_steps,
         "rewrite_steps": rewrite_steps,
         "source": "prolog_builder",
         "question": original_formula["formula"],
@@ -1192,19 +1289,16 @@ def build_exercise(
 
 def build_ex_depth(
     depth: int | None = None,
-    variables: Sequence[str] = DEFAULT_VARIABLES,
     use_all: bool = False,
     timeout: int = 10,
     seed: int | None = None,
     wrong_answers_count: int = 3,
-    max_steps: int = 2,
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
 ) -> dict:
-    """Costruisce un esercizio a partire da profondita e vincoli sulle variabili."""
+    """Costruisce un esercizio con variabili e trasformazioni completamente automatiche."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
-    _req_int_ge("max_steps", max_steps, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
@@ -1216,6 +1310,8 @@ def build_ex_depth(
     def remaining_timeout(cap: int | None = None) -> int:
         left = max(1, int(math.ceil(deadline - time.monotonic())))
         return min(left, cap) if cap is not None else left
+
+    variables = _select_random_var_set(rng=rng, depth=depth)
 
     depth, variables = _resolve_depth(depth, variables)
     formulas = _get_formulas(
@@ -1248,7 +1344,6 @@ def build_ex_depth(
                 bridge=bridge,
                 seed=seed,
                 wrong_answers_count=wrong_answers_count,
-                max_steps=max_steps,
                 operator_cycles=operator_cycles,
                 wrong_from_correct=wrong_from_correct,
                 timeout=remaining_timeout(total_timeout),
@@ -1267,7 +1362,6 @@ def build_ex_json(
     bridge: PrologBridge | None = None,
     seed: int | None = None,
     wrong_answers_count: int = 3,
-    max_steps: int = 2,
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     timeout: int = 10,
@@ -1275,7 +1369,6 @@ def build_ex_json(
     """Serializza l output di build_exercise come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
-    _req_int_ge("max_steps", max_steps, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
     return json.dumps(
@@ -1284,7 +1377,6 @@ def build_ex_json(
             bridge=bridge,
             seed=seed,
             wrong_answers_count=wrong_answers_count,
-            max_steps=max_steps,
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             timeout=timeout,
@@ -1296,12 +1388,10 @@ def build_ex_json(
 
 def build_ex_depth_json(
     depth: int | None = None,
-    variables: Sequence[str] = DEFAULT_VARIABLES,
     use_all: bool = False,
     timeout: int = 10,
     seed: int | None = None,
     wrong_answers_count: int = 3,
-    max_steps: int = 2,
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
@@ -1309,18 +1399,15 @@ def build_ex_depth_json(
     """Serializza l output di build_ex_depth come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
-    _req_int_ge("max_steps", max_steps, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
     return json.dumps(
         build_ex_depth(
             depth=depth,
-            variables=variables,
             use_all=use_all,
             timeout=timeout,
             seed=seed,
             wrong_answers_count=wrong_answers_count,
-            max_steps=max_steps,
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             bridge=bridge,

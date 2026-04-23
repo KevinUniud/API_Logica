@@ -39,7 +39,7 @@ class ApiTests(unittest.TestCase):
         with patch("server.generator.build_ex_depth", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-exercise-from-depth",
-                json={"variables": ["p", "q"], "seed": 42},
+                json={"seed": 42},
             )
 
         self.assertEqual(response.status_code, 200)
@@ -129,7 +129,6 @@ class ApiTests(unittest.TestCase):
         response = self.client.post(
             "/api/generator/build-exercise-from-depth",
             json={
-                "variables": ["p", "q"],
                 "seed": 42,
                 "unexpected": True,
             },
@@ -142,7 +141,7 @@ class ApiTests(unittest.TestCase):
         """Esegue un controllo integrazione reale sull'endpoint generatore."""
         response = self.client.post(
             "/api/generator/build-exercise-from-depth",
-            json={"variables": ["p", "q"], "seed": 42},
+            json={"seed": 42},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()

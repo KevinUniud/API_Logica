@@ -156,6 +156,25 @@ def prolog_var_list(expr_or_vars):
     return _cached_var_list(vars_sorted)
 
 
+def _resolve_vars_for_expr(expr, vars_list: Iterable[str] | None = None) -> list[str]:
+    """Restituisce la lista variabili da usare, inferendola anche da stringhe Prolog."""
+    if vars_list is not None:
+        return list(vars_list)
+
+    parsed = from_prolog(expr) if isinstance(expr, str) else expr
+    return sorted(collect_variables(parsed))
+
+
+def _resolve_vars_for_binary(left, right, vars_list: Iterable[str] | None = None) -> list[str]:
+    """Restituisce la lista variabili da usare per predicati binari."""
+    if vars_list is not None:
+        return list(vars_list)
+
+    left_expr = from_prolog(left) if isinstance(left, str) else left
+    right_expr = from_prolog(right) if isinstance(right, str) else right
+    return sorted(collect_variables(left_expr) | collect_variables(right_expr))
+
+
 def valuation_to_prolog(valuation: Sequence[tuple[str, bool] | str]):
     """Utility interna per conversione/validazione: valuation_to_prolog."""
     parts: list[str] = []
@@ -519,28 +538,25 @@ class PrologBridge:
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
-        return self.ask_bool(f"equiv({left_str}, {right_str}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
+        return self.ask_bool(f"equiv({left_str}, {right_str}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def not_equiv(self, left, right, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: not_equiv."""
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
-        return self.ask_bool(f"not_equiv({left_str}, {right_str}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
+        return self.ask_bool(f"not_equiv({left_str}, {right_str}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def counterexample_equiv(self, left, right, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: counterexample_equiv."""
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
         goal = (
-            f"findall(ValuationStrs, (counterexample_equiv({left_str}, {right_str}, {prolog_var_list(list(vars_list))}, V), "
+            f"findall(ValuationStrs, (counterexample_equiv({left_str}, {right_str}, {prolog_var_list(resolved_vars)}, V), "
             f"{self._valuation_strings_expr('V')}), Vs), json_write_dict(current_output, _{{valuations:Vs}})"
         )
         data = self.run_json_query(goal, timeout=timeout)
@@ -555,13 +571,10 @@ class PrologBridge:
     ) -> list[str]:
         """Wrapper bridge per la routine Prolog: filter_non_equivalent."""
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        if vars_list is None:
-            raise ValueError("vars_list e obbligatorio quando expr e una stringa Prolog")
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         candidates_str = prolog_term_list(list(candidates))
         goal = (
-            f"filter_non_equivalent({formula}, {candidates_str}, {prolog_var_list(list(vars_list))}, L), "
+            f"filter_non_equivalent({formula}, {candidates_str}, {prolog_var_list(resolved_vars)}, L), "
             f"findall(OutStr, (member(Out, L), term_string(Out, OutStr)), Raw), "
             f"json_write_dict(current_output, _{{formulas:Raw}})"
         )
@@ -577,13 +590,10 @@ class PrologBridge:
     ) -> list[str]:
         """Wrapper bridge per la routine Prolog: filter_equivalent."""
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        if vars_list is None:
-            raise ValueError("vars_list e obbligatorio quando expr e una stringa Prolog")
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         candidates_str = prolog_term_list(list(candidates))
         goal = (
-            f"filter_equivalent({formula}, {candidates_str}, {prolog_var_list(list(vars_list))}, L), "
+            f"filter_equivalent({formula}, {candidates_str}, {prolog_var_list(resolved_vars)}, L), "
             f"findall(OutStr, (member(Out, L), term_string(Out, OutStr)), Raw), "
             f"json_write_dict(current_output, _{{formulas:Raw}})"
         )
@@ -594,10 +604,9 @@ class PrologBridge:
         """Wrapper bridge per la routine Prolog: all_models."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         goal = (
-            f"all_models({formula}, {prolog_var_list(list(vars_list))}, Models), "
+            f"all_models({formula}, {prolog_var_list(resolved_vars)}, Models), "
             f"findall(ValuationStrs, (member(V, Models), {self._valuation_strings_expr('V')}), JsonModels), "
             f"json_write_dict(current_output, _{{models:JsonModels}})"
         )
@@ -608,10 +617,9 @@ class PrologBridge:
         """Wrapper bridge per la routine Prolog: all_countermodels."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         goal = (
-            f"all_countermodels({formula}, {prolog_var_list(list(vars_list))}, Models), "
+            f"all_countermodels({formula}, {prolog_var_list(resolved_vars)}, Models), "
             f"findall(ValuationStrs, (member(V, Models), {self._valuation_strings_expr('V')}), JsonModels), "
             f"json_write_dict(current_output, _{{models:JsonModels}})"
         )
@@ -622,10 +630,9 @@ class PrologBridge:
         """Wrapper bridge per la routine Prolog: model."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         goal = (
-            f"findall(ValuationStrs, (model({formula}, {prolog_var_list(list(vars_list))}, V), {self._valuation_strings_expr('V')}), Vs), "
+            f"findall(ValuationStrs, (model({formula}, {prolog_var_list(resolved_vars)}, V), {self._valuation_strings_expr('V')}), Vs), "
             f"json_write_dict(current_output, _{{valuations:Vs}})"
         )
         data = self.run_json_query(goal, timeout=timeout)
@@ -635,10 +642,9 @@ class PrologBridge:
         """Wrapper bridge per la routine Prolog: countermodel."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
         goal = (
-            f"findall(ValuationStrs, (countermodel({formula}, {prolog_var_list(list(vars_list))}, V), {self._valuation_strings_expr('V')}), Vs), "
+            f"findall(ValuationStrs, (countermodel({formula}, {prolog_var_list(resolved_vars)}, V), {self._valuation_strings_expr('V')}), Vs), "
             f"json_write_dict(current_output, _{{valuations:Vs}})"
         )
         data = self.run_json_query(goal, timeout=timeout)
@@ -648,33 +654,29 @@ class PrologBridge:
         """Wrapper bridge per la routine Prolog: tautology."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        return self.ask_bool(f"tautology({formula}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
+        return self.ask_bool(f"tautology({formula}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def contradiction(self, expr, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: contradiction."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        return self.ask_bool(f"contradiction({formula}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
+        return self.ask_bool(f"contradiction({formula}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def satisfiable(self, expr, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: satisfiable."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        return self.ask_bool(f"satisfiable({formula}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
+        return self.ask_bool(f"satisfiable({formula}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def unsatisfiable(self, expr, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: unsatisfiable."""
         _req_int_ge("timeout", timeout, 1)
         formula = to_prolog(expr) if not isinstance(expr, str) else expr
-        if vars_list is None and not isinstance(expr, str):
-            vars_list = collect_variables(expr)
-        return self.ask_bool(f"unsatisfiable({formula}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_expr(expr, vars_list)
+        return self.ask_bool(f"unsatisfiable({formula}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def satisfying_assignment(self, expr, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: satisfying_assignment."""
@@ -689,27 +691,24 @@ class PrologBridge:
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
-        return self.ask_bool(f"implies_formula({left_str}, {right_str}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
+        return self.ask_bool(f"implies_formula({left_str}, {right_str}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def mutually_exclusive(self, left, right, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: mutually_exclusive."""
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
-        return self.ask_bool(f"mutually_exclusive({left_str}, {right_str}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
+        return self.ask_bool(f"mutually_exclusive({left_str}, {right_str}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def jointly_satisfiable(self, left, right, vars_list: Iterable[str] | None = None, timeout: int = 10):
         """Wrapper bridge per la routine Prolog: jointly_satisfiable."""
         _req_int_ge("timeout", timeout, 1)
         left_str = to_prolog(left) if not isinstance(left, str) else left
         right_str = to_prolog(right) if not isinstance(right, str) else right
-        if vars_list is None:
-            vars_list = collect_variables(left) | collect_variables(right)
-        return self.ask_bool(f"jointly_satisfiable({left_str}, {right_str}, {prolog_var_list(list(vars_list))})", timeout=timeout)
+        resolved_vars = _resolve_vars_for_binary(left, right, vars_list)
+        return self.ask_bool(f"jointly_satisfiable({left_str}, {right_str}, {prolog_var_list(resolved_vars)})", timeout=timeout)
 
     def same_value_under(self, left, right, valuation: Sequence[tuple[str, bool] | str], timeout: int = 10):
         """Wrapper bridge per la routine Prolog: same_value_under."""

@@ -1,5 +1,7 @@
 import unittest
 from collections import Counter
+import random
+from typing import cast
 
 from ast_logic import And, Iff, Imp, Not, Or, Var
 from generator import build_ex_depth
@@ -7,6 +9,10 @@ from generator import build_tvq
 from generator import generate_formula
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
+
+
+def _bridge(value):
+    return cast(PrologBridge, value)
 
 
 def _count_atoms(prolog_formula: str) -> int:
@@ -29,17 +35,33 @@ class FakeBridge:
     def __init__(self):
         """Inizializza lo stato del double di test."""
         self.modified_map = {
-            "and(p,q)": ["and(p,q)", "or(p,q)", "imp(p,q)"],
-            "or(p,q)": ["or(p,q)", "imp(p,q)", "not(p)"],
+            "and(and(p,q),and(r,s))": [
+                "and(and(p,q),and(r,s))",
+                "or(and(p,q),and(r,s))",
+                "imp(and(p,q),and(r,s))",
+            ],
+            "or(and(p,q),and(r,s))": [
+                "or(and(p,q),and(r,s))",
+                "imp(and(p,q),and(r,s))",
+                "not(and(p,q))",
+            ],
         }
         self.distractor_map = {
-            "and(p,q)": ["and(p,not(q))", "or(not(p),q)", "imp(p,q)"],
-            "or(p,q)": ["or(p,not(q))", "and(not(p),q)", "imp(q,p)"],
+            "and(and(p,q),and(r,s))": [
+                "or(and(p,q),and(r,s))",
+                "imp(and(p,q),and(r,s))",
+                "iff(and(p,q),and(r,s))",
+            ],
+            "or(and(p,q),and(r,s))": [
+                "and(and(p,q),and(r,s))",
+                "imp(and(p,q),and(r,s))",
+                "iff(and(p,q),and(r,s))",
+            ],
         }
 
     def formula_of_depth(self, depth, variables, timeout=10):
         """Restituisce formule di test alla profondita richiesta."""
-        return ["and(p,q)", "or(p,q)"]
+        return ["and(and(p,q),and(r,s))", "or(and(p,q),and(r,s))"]
 
     def all_depth(self, depth, variables, timeout=10):
         """Restituisce tutte le formule di test della profondita richiesta."""
@@ -86,7 +108,11 @@ class RetryBridge(FakeBridge):
     def __init__(self):
         """Inizializza lo stato del double di test."""
         super().__init__()
-        self.distractor_map["and(p,q)"] = []
+        self.distractor_map["and(and(p,q),and(r,s))"] = []
+
+    def not_equiv(self, left, right, vars_list=None, timeout=10):
+        """Accetta i distractor generati nel percorso di retry."""
+        return True
 
 
 class GeneratorTests(unittest.TestCase):
@@ -136,7 +162,7 @@ class GeneratorTests(unittest.TestCase):
             true_options_count=2,
             false_options_count=2,
             seed=11,
-            bridge=TruthValueQuestionBridge(),
+            bridge=_bridge(TruthValueQuestionBridge()),
         )
 
         self.assertEqual(question["information"], ["p-true", "q-false"])
@@ -149,21 +175,140 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(all(entry["is_true"] for entry in question["true_options"]))
         self.assertTrue(all(not entry["is_true"] for entry in question["false_options"]))
 
+    def test_ex_depth_defaults_to_allowed_variable_sets(self):
+        """Verifica che build_ex_depth senza variables usi solo {p,q,r,s} o {p,q,r,s,t}."""
+
+        class RandomVarDepthBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                vars_tuple = tuple(variables)
+                if vars_tuple == ("p", "q", "r", "s"):
+                    return ["and(and(p,q),and(r,s))"]
+                if vars_tuple == ("p", "q", "r", "s", "t"):
+                    return ["and(and(p,q),and(r,and(s,t)))"]
+                return []
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                if expr == "and(and(p,q),and(r,s))":
+                    return [expr, "or(and(p,q),and(r,s))", "imp(and(p,q),and(r,s))"]
+                if expr == "and(and(p,q),and(r,and(s,t)))":
+                    return [expr, "or(and(p,q),and(r,and(s,t)))", "imp(and(p,q),and(r,and(s,t)))"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                return self.rewrite_path(expr, timeout=timeout)
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                return left != right and sorted(collect_variables(from_prolog(left))) == sorted(
+                    collect_variables(from_prolog(right))
+                )
+
+            def all_step_neq(self, expr, timeout=10):
+                if expr in {"and(and(p,q),and(r,s))", "or(and(p,q),and(r,s))"}:
+                    return [
+                        "or(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                    ]
+                if expr in {
+                    "and(and(p,q),and(r,and(s,t)))",
+                    "or(and(p,q),and(r,and(s,t)))",
+                }:
+                    return [
+                        "or(and(p,q),and(r,and(s,t)))",
+                        "imp(and(p,q),and(r,and(s,t)))",
+                        "iff(and(p,q),and(r,and(s,t)))",
+                    ]
+                return []
+
+            def one_step_neq(self, expr, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                return right in self.all_step_neq(left, timeout=timeout)
+
+        bridge = RandomVarDepthBridge()
+        random.seed(42)
+        seen_sets: set[tuple[str, ...]] = set()
+
+        for seed in range(20):
+            exercise = build_ex_depth(
+                wrong_answers_count=2,
+                seed=seed,
+                bridge=_bridge(bridge),
+            )
+            seen_sets.add(tuple(exercise["variables"]))
+
+        allowed = {("p", "q", "r", "s"), ("p", "q", "r", "s", "t")}
+        self.assertTrue(seen_sets.issubset(allowed))
+        self.assertEqual(seen_sets, allowed)
+
+    def test_tvq_defaults_to_allowed_variable_sets(self):
+        """Verifica che build_tvq con predicate_count 4/5 usi set variabili ammessi."""
+
+        class RandomVarTvqBridge(FakeBridge):
+            def assignment(self, vars_list, timeout=10):
+                return [[f"{name}-true" for name in vars_list]]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                vars_tuple = tuple(variables)
+                if vars_tuple == ("p", "q", "r", "s"):
+                    return [
+                        "and(and(p,q),and(r,s))",
+                        "or(and(p,q),and(r,s))",
+                    ][:limit]
+                if vars_tuple == ("p", "q", "r", "s", "t"):
+                    return [
+                        "and(and(p,q),and(r,and(s,t)))",
+                        "or(and(p,q),and(r,and(s,t)))",
+                    ][:limit]
+                return []
+
+            def eval(self, expr, valuation, timeout=10):
+                return expr.startswith("or(")
+
+        bridge = RandomVarTvqBridge()
+        random.seed(99)
+        seen_sets: set[tuple[str, ...]] = set()
+
+        for seed in range(20):
+            question = build_tvq(
+                predicate_count=4,
+                true_options_count=1,
+                false_options_count=1,
+                seed=seed,
+                bridge=_bridge(bridge),
+            )
+            seen_sets.add(tuple(question["variables"]))
+
+        allowed = {("p", "q", "r", "s"), ("p", "q", "r", "s", "t")}
+        self.assertTrue(seen_sets.issubset(allowed))
+        self.assertEqual(seen_sets, allowed)
+
     def test_ex_few_preds_distinct(self):
         """Verifica che la formula modificata resti distinta con pochi predicati."""
         class FewPredicatesBridge(FakeBridge):
             def formula_of_depth(self, depth, variables, timeout=10):
                 """Restituisce una sola formula per simulare bassa varieta."""
-                return ["and(p,q)"]
+                return ["and(and(p,q),and(r,s))"]
 
             def some_depth(self, depth, variables, limit, timeout=10):
                 """Restituisce una lista limitata di formule campione."""
-                return ["and(p,q)"][:limit]
+                return ["and(and(p,q),and(r,s))"][:limit]
 
             def rewrite_path(self, expr, timeout=10):
                 """Simula un percorso di riscrittura minimale."""
-                if expr == "and(p,q)":
-                    return ["and(p,q)", "or(p,q)"]
+                if expr == "and(and(p,q),and(r,s))":
+                    return [
+                        "and(and(p,q),and(r,s))",
+                        "or(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                    ]
                 return [expr]
 
             def rewrite_formula(self, expr, timeout=10):
@@ -172,17 +317,18 @@ class GeneratorTests(unittest.TestCase):
 
             def equiv(self, left, right, vars_list=None, timeout=10):
                 """Forza equivalenza per una coppia specifica nel test."""
-                if left == "and(p,q)" and right == "or(p,q)":
+                if left == "and(and(p,q),and(r,s))" and right in {
+                    "or(and(p,q),and(r,s))",
+                    "imp(and(p,q),and(r,s))",
+                }:
                     return True
                 return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
 
         exercise = build_ex_depth(
-            depth=1,
-            variables=["p", "q"],
+            depth=2,
             wrong_answers_count=2,
-            max_steps=1,
             seed=3,
-            bridge=FewPredicatesBridge(),
+            bridge=_bridge(FewPredicatesBridge()),
         )
 
         self.assertNotEqual(
@@ -194,11 +340,9 @@ class GeneratorTests(unittest.TestCase):
         """Verifica la struttura del payload esercizio generato."""
         exercise = build_ex_depth(
             depth=2,
-            variables=["p", "q"],
             wrong_answers_count=3,
-            max_steps=2,
             seed=7,
-            bridge=FakeBridge(),
+            bridge=_bridge(FakeBridge()),
         )
 
         self.assertIn("original_formula", exercise)
@@ -216,25 +360,26 @@ class GeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(exercise["modified_formula"]["steps"], 1)
 
     def test_ex_depth_retry_formula(self):
-        """Verifica il retry su formula alternativa quando mancano distractor."""
-        exercise = build_ex_depth(
-            depth=2,
-            variables=["p", "q"],
-            wrong_answers_count=3,
-            max_steps=2,
-            seed=1,
-            bridge=RetryBridge(),
-        )
+        """Con vincoli piu stretti, il retry puo esaurire i candidati e fallire in modo controllato."""
+        with self.assertRaisesRegex(RuntimeError, "Impossibile costruire un esercizio completo"):
+            build_ex_depth(
+                depth=2,
+                wrong_answers_count=1,
+                seed=1,
+                bridge=_bridge(RetryBridge()),
+            )
 
-        self.assertEqual(exercise["original_formula"]["formula_prolog"], "or(p,q)")
-        self.assertEqual(len(exercise["wrong_answers_prolog"]), 3)
-
-    def test_ex_depth_uses_all_vars(self):
-        """Verifica che l'esercizio usi tutte le variabili richieste."""
+    def test_ex_depth_uses_auto_selected_vars(self):
+        """Verifica che l'esercizio usi il set variabili auto-selezionato."""
         class AllVarsBridge(FakeBridge):
             def formula_of_depth(self, depth, variables, timeout=10):
                 """Fornisce formule che includono tutte le variabili target."""
-                return ["and(p,q)", "and(and(a,b),or(c,d))"]
+                vars_tuple = tuple(variables)
+                if vars_tuple == ("p", "q", "r", "s"):
+                    return ["and(and(p,q),or(r,s))"]
+                if vars_tuple == ("p", "q", "r", "s", "t"):
+                    return ["and(and(p,q),and(r,and(s,t)))"]
+                return []
 
             def some_depth(self, depth, variables, limit, timeout=10):
                 """Restituisce un campione limitato delle formule disponibili."""
@@ -242,8 +387,18 @@ class GeneratorTests(unittest.TestCase):
 
             def rewrite_path(self, expr, timeout=10):
                 """Simula il percorso di riscrittura per la formula selezionata."""
-                if expr == "and(and(a,b),or(c,d))":
-                    return [expr, "or(and(a,b),or(c,d))"]
+                if expr == "and(and(p,q),or(r,s))":
+                    return [
+                        expr,
+                        "or(and(p,q),or(r,s))",
+                        "imp(and(p,q),or(r,s))",
+                    ]
+                if expr == "and(and(p,q),and(r,and(s,t)))":
+                    return [
+                        expr,
+                        "or(and(p,q),and(r,and(s,t)))",
+                        "imp(and(p,q),and(r,and(s,t)))",
+                    ]
                 return super().rewrite_path(expr, timeout=timeout)
 
             def rewrite_formula(self, expr, timeout=10):
@@ -252,14 +407,32 @@ class GeneratorTests(unittest.TestCase):
 
             def equiv(self, left, right, vars_list=None, timeout=10):
                 """Simula equivalenza solo per la coppia attesa dal test."""
-                if left == "and(and(a,b),or(c,d))":
-                    return right == "or(and(a,b),or(c,d))"
+                if left == "and(and(p,q),or(r,s))":
+                    return right in {
+                        "or(and(p,q),or(r,s))",
+                        "imp(and(p,q),or(r,s))",
+                    }
+                if left == "and(and(p,q),and(r,and(s,t)))":
+                    return right in {
+                        "or(and(p,q),and(r,and(s,t)))",
+                        "imp(and(p,q),and(r,and(s,t)))",
+                    }
                 return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
 
             def all_step_neq(self, expr, timeout=10):
                 """Restituisce distractor non equivalenti per il caso all-vars."""
-                if expr == "and(and(a,b),or(c,d))":
-                    return ["and(and(a,b),and(c,d))", "or(and(a,b),and(c,d))", "imp(and(a,b),or(c,d))"]
+                if expr == "and(and(p,q),or(r,s))":
+                    return [
+                        "and(and(p,q),and(r,s))",
+                        "or(and(p,q),and(r,s))",
+                        "iff(and(p,q),or(r,s))",
+                    ]
+                if expr == "and(and(p,q),and(r,and(s,t)))":
+                    return [
+                        "or(and(p,q),and(r,and(s,t)))",
+                        "imp(and(p,q),and(r,and(s,t)))",
+                        "iff(and(p,q),and(r,and(s,t)))",
+                    ]
                 return super().all_step_neq(expr, timeout=timeout)
 
             def one_step_neq(self, expr, timeout=10):
@@ -276,32 +449,26 @@ class GeneratorTests(unittest.TestCase):
 
             def not_equiv(self, left, right, vars_list=None, timeout=10):
                 """Valuta la non equivalenza con i distractor simulati."""
-                if left == "and(and(a,b),or(c,d))":
-                    return right in self.all_step_neq(left, timeout=timeout)
-                return super().not_equiv(left, right, vars_list=vars_list, timeout=timeout)
+                return True
 
         exercise = build_ex_depth(
-            depth=3,
-            variables=["a", "b", "c", "d"],
-            wrong_answers_count=3,
-            max_steps=2,
+            depth=2,
+            wrong_answers_count=1,
             seed=5,
-            bridge=AllVarsBridge(),
+            bridge=_bridge(AllVarsBridge()),
         )
 
-        self.assertEqual(exercise["variables"], ["a", "b", "c", "d"])
-        self.assertEqual(exercise["original_formula"]["variables"], ["a", "b", "c", "d"])
+        self.assertEqual(exercise["variables"], ["p", "q", "r", "s"])
+        self.assertEqual(exercise["original_formula"]["variables"], ["p", "q", "r", "s"])
 
-    def test_ex_depth_rejects_var_count(self):
-        """Verifica l'errore quando le variabili superano la profondita utile."""
-        with self.assertRaisesRegex(ValueError, "non consente di usare tutte le variabili"):
+    def test_ex_depth_auto_vars_respect_depth(self):
+        """Verifica che la selezione automatica variabili rispetti i limiti di profondita."""
+        with self.assertRaisesRegex(ValueError, "non consente il set automatico di variabili"):
             build_ex_depth(
                 depth=1,
-                variables=["a", "b", "c"],
                 wrong_answers_count=3,
-                max_steps=2,
                 seed=5,
-                bridge=FakeBridge(),
+                bridge=_bridge(FakeBridge()),
             )
 
     def test_gen_formula_head_balance(self):
@@ -354,7 +521,7 @@ class GeneratorTests(unittest.TestCase):
         counts = Counter()
         bridge = HeadBalancedBridge()
         for seed in range(1, 101):
-            formula = generate_formula(depth=2, variables=["p", "q", "r"], seed=seed, bridge=bridge)
+            formula = generate_formula(depth=2, variables=["p", "q", "r"], seed=seed, bridge=_bridge(bridge))
             head = formula.split("(", 1)[0] if "(" in formula else "var"
             counts[head] += 1
 
@@ -368,7 +535,12 @@ class GeneratorTests(unittest.TestCase):
             def all_step_neq(self, expr, timeout=10):
                 """Introduce volontariamente un distractor con variabile fuori set."""
                 # Include un distractor non valido con variabile x (fuori domanda).
-                return ["or(p,q)", "and(p,x)", "imp(p,q)", "and(p,not(q))", "or(not(p),q)"]
+                return [
+                    "or(and(p,q),and(r,s))",
+                    "and(and(p,q),and(r,x))",
+                    "imp(and(p,q),and(r,s))",
+                    "iff(and(p,q),and(r,s))",
+                ]
 
             def one_step_neq(self, expr, timeout=10):
                 """Riusa la stessa sorgente di distractor per un passo."""
@@ -384,26 +556,22 @@ class GeneratorTests(unittest.TestCase):
 
         exercise = build_ex_depth(
             depth=2,
-            variables=["p", "q"],
             wrong_answers_count=2,
-            max_steps=2,
             seed=7,
-            bridge=VarsLeakBridge(),
+            bridge=_bridge(VarsLeakBridge()),
         )
 
         for wrong in exercise["wrong_answers_prolog"]:
             used = collect_variables(from_prolog(wrong))
-            self.assertEqual(used, {"p", "q"}, msg=f"Distractor con variabili non valide: {wrong}")
+            self.assertEqual(used, {"p", "q", "r", "s"}, msg=f"Distractor con variabili non valide: {wrong}")
 
     def test_ex_depth_atom_count_matches_question(self):
         """Verifica che domanda, corretta e distractor abbiano stesso numero di atomi."""
         exercise = build_ex_depth(
             depth=2,
-            variables=["p", "q"],
             wrong_answers_count=3,
-            max_steps=2,
             seed=9,
-            bridge=FakeBridge(),
+            bridge=_bridge(FakeBridge()),
         )
 
         question_atoms = _count_atoms(exercise["question_prolog"])
@@ -420,13 +588,26 @@ class GeneratorTests(unittest.TestCase):
                 super().__init__()
                 self.called_sources: list[str] = []
                 self.source_map = {
-                    "and(p,q)": ["and(p,not(q))", "or(not(p),q)", "imp(p,q)"],
-                    "or(p,q)": ["or(p,not(q))", "and(not(p),q)", "imp(q,p)"],
+                    "and(and(p,q),and(r,s))": [
+                        "or(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                    ],
+                    "or(and(p,q),and(r,s))": [
+                        "and(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                    ],
+                    "imp(and(p,q),and(r,s))": [
+                        "and(and(p,q),and(r,s))",
+                        "or(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                    ],
                 }
 
             def formula_of_depth(self, depth, variables, timeout=10):
                 """Restituisce una sola formula per rendere stabile la sorgente test."""
-                return ["and(p,q)"]
+                return ["and(and(p,q),and(r,s))"]
 
             def some_depth(self, depth, variables, limit, timeout=10):
                 """Restituisce campione limitato dalla formula fissa."""
@@ -434,8 +615,12 @@ class GeneratorTests(unittest.TestCase):
 
             def rewrite_path(self, expr, timeout=10):
                 """Forza una risposta corretta diversa ma equivalente nel test."""
-                if expr == "and(p,q)":
-                    return ["and(p,q)", "or(p,q)"]
+                if expr == "and(and(p,q),and(r,s))":
+                    return [
+                        "and(and(p,q),and(r,s))",
+                        "or(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                    ]
                 return [expr]
 
             def rewrite_formula(self, expr, timeout=10):
@@ -444,17 +629,20 @@ class GeneratorTests(unittest.TestCase):
 
             def equiv(self, left, right, vars_list=None, timeout=10):
                 """Simula equivalenza solo per la coppia attesa nel test."""
-                if left == "and(p,q)" and right == "or(p,q)":
+                if left == "and(and(p,q),and(r,s))" and right in {
+                    "or(and(p,q),and(r,s))",
+                    "imp(and(p,q),and(r,s))",
+                }:
                     return True
                 return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
 
             def all_step_neq(self, expr, timeout=10):
                 """Registra quale formula viene usata come sorgente dei distractor."""
                 self.called_sources.append(expr)
-                if expr == "and(q,p)":
-                    expr = "and(p,q)"
-                if expr == "or(q,p)":
-                    expr = "or(p,q)"
+                if expr == "and(and(q,p),and(r,s))":
+                    expr = "and(and(p,q),and(r,s))"
+                if expr == "or(and(q,p),and(r,s))":
+                    expr = "or(and(p,q),and(r,s))"
                 return list(self.source_map.get(expr, []))
 
             def one_step_neq(self, expr, timeout=10):
@@ -474,29 +662,154 @@ class GeneratorTests(unittest.TestCase):
         legacy_bridge = SourceSwitchBridge()
         build_ex_depth(
             depth=2,
-            variables=["p", "q"],
             wrong_answers_count=2,
-            max_steps=2,
             seed=13,
             wrong_from_correct=False,
-            bridge=legacy_bridge,
+            bridge=_bridge(legacy_bridge),
         )
-        self.assertIn("and(p,q)", legacy_bridge.called_sources)
+        self.assertIn("and(and(p,q),and(r,s))", legacy_bridge.called_sources)
 
         from_correct_bridge = SourceSwitchBridge()
         build_ex_depth(
             depth=2,
-            variables=["p", "q"],
             wrong_answers_count=2,
-            max_steps=2,
             seed=13,
             wrong_from_correct=True,
-            bridge=from_correct_bridge,
+            bridge=_bridge(from_correct_bridge),
         )
         self.assertTrue(
-            "or(p,q)" in from_correct_bridge.called_sources
-            or "or(q,p)" in from_correct_bridge.called_sources
+            "or(and(p,q),and(r,s))" in from_correct_bridge.called_sources
+            or "or(and(q,p),and(r,s))" in from_correct_bridge.called_sources
+            or "imp(and(p,q),and(r,s))" in from_correct_bridge.called_sources
         )
+
+    def test_correct_answer_not_only_variable_reorder(self):
+        """Verifica che la risposta corretta non sia solo uno scambio commutativo di variabili."""
+        class ReorderOnlyBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                """Restituisce una sola formula di base."""
+                return ["and(and(p,q),and(r,s))"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                """Restituisce il campione limitato dalla formula base."""
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                """Restituisce solo una variante commutativa della domanda."""
+                if expr == "and(and(p,q),and(r,s))":
+                    return ["and(and(p,q),and(r,s))", "and(and(q,p),and(r,s))"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                """Riusa il percorso di rewrite commutativo."""
+                return self.rewrite_path(expr, timeout=timeout)
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                """Dichiara equivalenza tra formula e versione commutata."""
+                if left == "and(and(p,q),and(r,s))" and right == "and(and(q,p),and(r,s))":
+                    return True
+                return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
+
+        with self.assertRaisesRegex(RuntimeError, "Impossibile costruire un esercizio completo"):
+            build_ex_depth(
+                depth=2,
+                wrong_answers_count=2,
+                seed=17,
+                bridge=_bridge(ReorderOnlyBridge()),
+            )
+
+    def test_correct_answer_requires_min_two_non_trivial_steps(self):
+        """Verifica che una sola trasformazione non banale non sia sufficiente."""
+
+        class OneStepOnlyBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                return ["and(and(p,q),and(r,s))"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                if expr == "and(and(p,q),and(r,s))":
+                    return [expr, "or(and(p,q),and(r,s))"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                return self.rewrite_path(expr, timeout=timeout)
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                if left == "and(and(p,q),and(r,s))" and right == "or(and(p,q),and(r,s))":
+                    return True
+                return False
+
+            def all_step_neq(self, expr, timeout=10):
+                return [
+                    "imp(and(p,q),and(r,s))",
+                    "iff(and(p,q),and(r,s))",
+                    "and(and(p,q),or(r,s))",
+                ]
+
+            def one_step_neq(self, expr, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                return True
+
+        with self.assertRaisesRegex(RuntimeError, "Impossibile costruire un esercizio completo"):
+            build_ex_depth(depth=2, wrong_answers_count=2, seed=23, bridge=_bridge(OneStepOnlyBridge()))
+
+    def test_correct_answer_with_imp_gets_second_non_trivial_step(self):
+        """Verifica che una trasformazione extra non banale consenta il superamento della soglia minima."""
+
+        class TwoStepBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                return ["and(and(p,q),and(r,s))"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                if expr == "and(and(p,q),and(r,s))":
+                    return [expr, "or(and(p,q),and(r,s))", "imp(and(p,q),and(r,s))"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                if expr == "and(and(p,q),and(r,s))":
+                    return ["imp(and(and(p,q),and(r,s)),and(p,q))"]
+                if expr == "imp(and(and(p,q),and(r,s)),and(p,q))":
+                    return ["or(not(and(and(p,q),and(r,s))),and(p,q))"]
+                return [expr]
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                if left == "and(and(p,q),and(r,s))" and right in {
+                    "or(and(p,q),and(r,s))",
+                    "imp(and(and(p,q),and(r,s)),and(p,q))",
+                    "or(not(and(and(p,q),and(r,s))),and(p,q))",
+                    "imp(and(p,q),and(r,s))",
+                }:
+                    return True
+                return False
+
+            def all_step_neq(self, expr, timeout=10):
+                return [
+                    "imp(and(p,q),and(r,s))",
+                    "iff(and(p,q),and(r,s))",
+                    "and(and(p,q),or(r,s))",
+                ]
+
+            def one_step_neq(self, expr, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                return True
+
+        exercise = build_ex_depth(depth=2, wrong_answers_count=2, seed=31, bridge=_bridge(TwoStepBridge()))
+        self.assertGreaterEqual(exercise["rewrite_steps"], 2)
 
 
 class PrologBridgeTests(unittest.TestCase):

@@ -115,14 +115,14 @@ class AutoDepthRequest(RequestBase):
     seed: int | None = Field(default=None, description="Seed casuale")
 
 
-class GeneratorAutoDepthRequest(AutoDepthRequest):
+class GeneratorAutoDepthRequest(RequestBase):
+    use_all: bool = Field(default=False, description="Se vero, usa tutte le formule candidate")
+    seed: int | None = Field(default=None, description="Seed casuale")
     wrong_answers_count: int = Field(default=3, ge=1, description="Numero di distrazioni errate")
-    max_steps: int = Field(default=2, ge=1, description="Numero massimo di passi per i distractor")
 
 
 class GeneratorExprRequest(FormulaRequest):
     wrong_answers_count: int = Field(default=3, ge=1, description="Numero di distrazioni errate")
-    max_steps: int = Field(default=2, ge=1, description="Numero massimo di passi per i distractor")
     seed: int | None = Field(default=None, description="Seed casuale")
 
 
@@ -248,19 +248,17 @@ FORMULA_PAYLOAD_EXAMPLES = {
 GENERATOR_EXPR_EXAMPLES = {
     "exercise-from-expr": {
         "summary": "Esercizio a partire da una formula",
-        "value": {"expr": "or(p,imp(q,p))", "wrong_answers_count": 3, "max_steps": 2, "seed": 42, "timeout": 10},
+        "value": {"expr": "or(p,imp(q,p))", "wrong_answers_count": 3, "seed": 42, "timeout": 10},
     }
 }
 
 GENERATOR_DEPTH_EXAMPLES = {
     "exercise-from-variables": {
-        "summary": "Esercizio a partire da variabili (profondita automatica)",
+        "summary": "Esercizio con variabili automatiche (profondita automatica)",
         "value": {
-            "variables": ["p", "q"],
             "use_all": False,
             "seed": 42,
             "wrong_answers_count": 3,
-            "max_steps": 2,
             "timeout": 10,
         },
     }
@@ -726,11 +724,11 @@ for path_suffix, operation_id, summary, payload_model, examples, handler in [
     ("formula-payload", "generator_formula_payload", "Restituisce payload JSON di una formula", FormulaPayloadRequest, FORMULA_PAYLOAD_EXAMPLES, lambda payload: generator.formula_payload(_parse_formula(payload.expr), **(payload.extra or {}))),
     ("generate-formula", "generator_generate_formula", "Genera una formula in sintassi Prolog (profondita automatica)", AutoDepthRequest, AUTO_DEPTH_EXAMPLES, lambda payload: generator.generate_formula(variables=payload.variables, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
     ("generate-formula-json", "generator_generate_formula_json", "Genera una formula come JSON (profondita automatica)", AutoDepthRequest, AUTO_DEPTH_EXAMPLES, lambda payload: generator.generate_formula_json(variables=payload.variables, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
-    ("build-exercise", "generator_build_exercise", "Costruisce un esercizio a partire da una formula", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_exercise(expr=payload.expr, wrong_answers_count=payload.wrong_answers_count, max_steps=payload.max_steps, bridge=_build_bridge(), seed=payload.seed, timeout=payload.timeout)),
-    ("build-exercise-from-depth", "generator_build_ex_depth", "Costruisce un esercizio da variabili (profondita automatica)", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth(variables=payload.variables, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, max_steps=payload.max_steps, bridge=_build_bridge())),
+    ("build-exercise", "generator_build_exercise", "Costruisce un esercizio a partire da una formula", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_exercise(expr=payload.expr, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge(), seed=payload.seed, timeout=payload.timeout)),
+    ("build-exercise-from-depth", "generator_build_ex_depth", "Costruisce un esercizio con variabili automatiche (profondita automatica)", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
     ("build-truth-value-options-question", "generator_build_tvq", "Costruisce una domanda da informazioni booleane sui predicati e opzioni vere/false", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
-    ("build-exercise-json-string", "generator_build_ex_json", "Costruisce un esercizio e lo serializza come stringa JSON", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_ex_json(expr=payload.expr, bridge=_build_bridge(), seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, max_steps=payload.max_steps, timeout=payload.timeout)),
-    ("build-exercise-from-depth-json-string", "generator_build_ex_depth_json", "Costruisce un esercizio da variabili e lo serializza come stringa JSON", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth_json(variables=payload.variables, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, max_steps=payload.max_steps, bridge=_build_bridge())),
+    ("build-exercise-json-string", "generator_build_ex_json", "Costruisce un esercizio e lo serializza come stringa JSON", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_ex_json(expr=payload.expr, bridge=_build_bridge(), seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, timeout=payload.timeout)),
+    ("build-exercise-from-depth-json-string", "generator_build_ex_depth_json", "Costruisce un esercizio con variabili automatiche e lo serializza come stringa JSON", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth_json(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
     ("build-truth-value-options-question-json-string", "generator_build_tvq_json", "Costruisce la domanda con opzioni vere/false e la serializza come JSON", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq_json(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
 ]:
     _add_post_route(
