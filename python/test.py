@@ -377,7 +377,7 @@ class GeneratorTests(unittest.TestCase):
         )
 
         self.assertEqual(question["variable_count"], 3)
-        self.assertIn("consequence_semantics", question)
+        self.assertNotIn("consequence_semantics", question)
         self.assertEqual(len(question["correct_options"]), 2)
         self.assertEqual(len(question["wrong_options"]), 2)
         self.assertTrue(all(entry["is_consequence"] for entry in question["correct_options"]))
@@ -520,7 +520,7 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(exercise["distraction_1"]["label"], "formula distrazione n1")
         self.assertEqual(exercise["distraction_2"]["label"], "formula distrazione n2")
         self.assertEqual(exercise["distraction_3"]["label"], "formula distrazione n3")
-        self.assertEqual(len(exercise["wrong_answers"]), 3)
+        self.assertEqual(len(exercise["wrong_answers_prolog"]), 3)
         self.assertIsInstance(exercise["modified_formula"]["steps"], int)
         self.assertGreaterEqual(exercise["modified_formula"]["steps"], 1)
 
@@ -624,7 +624,7 @@ class GeneratorTests(unittest.TestCase):
         )
 
         self.assertEqual(exercise["variables"], ["p", "q", "r", "s"])
-        self.assertEqual(exercise["original_formula"]["variables"], ["p", "q", "r", "s"])
+        self.assertNotIn("variables", exercise["original_formula"])
 
     def test_ex_depth_auto_vars_respect_depth(self):
         """Verifica che la selezione automatica variabili rispetti i limiti di profondita."""

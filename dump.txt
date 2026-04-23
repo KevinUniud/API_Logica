@@ -3,24 +3,24 @@
     "question_prolog": "imp(and(p,q),imp(s,r))",
     "correct_answer_prolog": "or(not(and(q,p)),or(r,not(s)))",
     "wrong_answers_prolog": [
-      "and(and(q,p),imp(s,r))",
+      "or(and(p,q),imp(s,r))",
       "and(and(p,q),imp(s,r))"
     ]
   },
   "build_tvq": {
     "true_options_prolog": [
-      "iff(and(q,s),and(t,iff(p,r)))"
+      "imp(and(p,q),iff(r,s))"
     ],
     "false_options_prolog": [
-      "imp(s,and(q,and(iff(r,p),t)))",
-      "or(and(and(t,r),p),and(q,s))",
-      "or(and(t,or(p,r)),and(q,s))"
+      "and(and(p,s),imp(q,r))",
+      "and(and(p,r),iff(q,s))",
+      "and(and(p,s),iff(q,r))"
     ],
     "options_prolog": [
-      "iff(and(q,s),and(t,iff(p,r)))",
-      "or(and(and(t,r),p),and(q,s))",
-      "or(and(t,or(p,r)),and(q,s))",
-      "imp(s,and(q,and(iff(r,p),t)))"
+      "and(and(p,r),iff(q,s))",
+      "and(and(p,s),imp(q,r))",
+      "imp(and(p,q),iff(r,s))",
+      "and(and(p,s),iff(q,r))"
     ]
   },
   "generate_formula_by_variable_count": "or(and(p,q),and(r,s))",
@@ -30,15 +30,15 @@
       "imp(and(p,q),iff(r,s))"
     ],
     "wrong_options_prolog": [
-      "not(q)",
-      "and(r,r)",
-      "and(and(q,r),imp(s,p))"
+      "and(and(p,s),and(q,r))",
+      "and(and(p,q),or(r,s))",
+      "iff(and(p,q),iff(r,s))"
     ],
     "options_prolog": [
+      "and(and(p,q),or(r,s))",
+      "and(and(p,s),and(q,r))",
       "imp(and(p,q),iff(r,s))",
-      "and(and(q,r),imp(s,p))",
-      "not(q)",
-      "and(r,r)"
+      "iff(and(p,q),iff(r,s))"
     ]
   }
 }

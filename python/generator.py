@@ -11,7 +11,7 @@ from typing import Any, Callable, Sequence, cast
 # Nodi AST logici per trasformazioni e riscritture locali.
 from ast_logic import And, Iff, Imp, Not, Or, Var
 # Bridge Prolog e utility di conversione usate dal generatore.
-from prolog_bridge import PrologBridge, collect_variables, formula_to_dict, from_prolog, get_default_bridge, to_prolog
+from prolog_bridge import PrologBridge, collect_variables, from_prolog, get_default_bridge, to_prolog
 
 
 DEFAULT_VARIABLES = ("p", "q", "r", "s", "t")
@@ -470,13 +470,12 @@ def formula_metadata(expr) -> dict:
 
 
 def formula_payload(expr, **extra) -> dict:
-    """Costruisce un payload serializzabile per una formula con campi extra opzionali."""
+    """Costruisce un payload serializzabile minimale per una formula."""
     payload = {
-        "formula": formula_to_dict(expr),
-        **formula_metadata(expr),
+        "formula_prolog": to_prolog(expr),
     }
     payload.update(extra)
-    _ensure_keys(payload, ["formula", "variables", "depth", "size", "formula_prolog"])
+    _ensure_keys(payload, ["formula_prolog"])
     return payload
 
 
@@ -771,7 +770,7 @@ def generate_formula_json(
         bridge=bridge,
     ))
     result = formula_payload(expr, source="prolog_depth")
-    _ensure_keys(result, ["formula", "variables", "depth", "size", "formula_prolog", "source"])
+    _ensure_keys(result, ["formula_prolog", "source"])
     return result
 
 
@@ -820,7 +819,7 @@ def generate_formula_by_variable_count_json(
         source="prolog_variable_count",
         variable_count=variable_count,
     )
-    _ensure_keys(result, ["formula", "variables", "depth", "size", "formula_prolog", "source"])
+    _ensure_keys(result, ["formula_prolog", "source", "variable_count"])
     return result
 
 
@@ -1235,9 +1234,6 @@ def build_tvq(
             "source": "prolog_assignment_and_eval",
         }
 
-        for index, option in enumerate(options, start=1):
-            result[f"option_{index}"] = option
-
         _ensure_keys(result, ["information", "options", "true_options", "false_options", "variables"])
         return result
 
@@ -1282,7 +1278,6 @@ def build_logical_consequence_question(
         seed=seed,
         bridge=bridge,
     )
-    question_expr = _as_ast(question_formula)
     question_prolog = _as_prolog(question_formula)
 
     def remaining_timeout(cap: int | None = None) -> int:
@@ -1428,9 +1423,7 @@ def build_logical_consequence_question(
         "variable_count": variable_count,
         "correct_options_count": correct_options_count,
         "wrong_options_count": wrong_options_count,
-        "consequence_semantics": "Q |= R: ogni valutazione che rende vera Q rende vera anche R",
         "variables": variables,
-        "question": formula_to_dict(question_expr),
         "question_prolog": question_prolog,
         "options": options,
         "correct_options": correct_entries,
@@ -1438,12 +1431,9 @@ def build_logical_consequence_question(
         "source": "prolog_implies_formula",
     }
 
-    for index, option in enumerate(options, start=1):
-        result[f"option_{index}"] = option
-
     _ensure_keys(
         result,
-        ["question", "question_prolog", "options", "correct_options", "wrong_options", "variables"],
+        ["question_prolog", "options", "correct_options", "wrong_options", "variables"],
     )
     return result
 
@@ -1585,18 +1575,15 @@ def build_exercise(
         "atom_count": question_atom_count,
         "rewrite_steps": rewrite_steps,
         "source": "prolog_builder",
-        "question": original_formula["formula"],
         "question_prolog": question_prolog,
-        "correct_answer": modified_formula["formula"],
         "correct_answer_prolog": modified_prolog,
-        "wrong_answers": [entry["formula"] for entry in distractions],
         "wrong_answers_prolog": wrong_selected,
     }
 
     for index, entry in enumerate(distractions, start=1):
         exercise[f"distraction_{index}"] = entry
 
-    _ensure_keys(exercise, ["original_formula", "modified_formula", "wrong_answers", "wrong_answers_prolog"])
+    _ensure_keys(exercise, ["original_formula", "modified_formula", "wrong_answers_prolog"])
     if len(exercise["wrong_answers_prolog"]) < wrong_answers_count:
         raise RuntimeError("Postcondizione fallita: distractor insufficienti")
     return exercise
