@@ -20,11 +20,16 @@ VAR_SET_SMALL = ("p", "q", "r", "s")
 DEFAULT_FORMULA_SAMPLE_LIMIT = 24
 DEFAULT_FORMULA_FETCH_MULTIPLIER = 8
 FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
+FORMULA_FETCH_CACHE_MAX = 64
 MAX_MODIFIED_EQUIV_CHECKS = 8
 DISTRACTION_CANDIDATE_MULTIPLIER = 4
 MAX_AUTOMATIC_TRANSFORM_CYCLES = 8
 MIN_NON_TRIVIAL_CORRECT_STEPS = 2
 DEFAULT_DISTRACTOR_MAX_STEPS = 2
+
+# Cache leggera in-process per evitare round-trip Prolog ripetuti
+# su stesse tuple (depth, vars, mode) durante piu generazioni consecutive.
+_FORMULA_FETCH_CACHE: dict[tuple[str, int, tuple[str, ...], bool], tuple[str, ...]] = {}
 
 
 def _req_int_ge(name: str, value: int, minimum: int) -> None:
@@ -291,6 +296,16 @@ def _get_formulas(
     rng: random.Random,
 ) -> list[str]:
     """Recupera formule candidate per profondita/variabili con fallback progressivi."""
+    cache_key: tuple[str, int, tuple[str, ...], bool] | None = None
+    if isinstance(bridge, PrologBridge):
+        cache_key = (bridge.__class__.__name__, depth, tuple(variables), use_all)
+        cached = _FORMULA_FETCH_CACHE.get(cache_key)
+        if cached is not None:
+            filtered_formulas = list(cached)
+            if use_all:
+                return filtered_formulas
+            return _diversify_sample(filtered_formulas, DEFAULT_FORMULA_SAMPLE_LIMIT, rng)
+
     def safe_fetch(callable_fn, *args, **kwargs):
         try:
             return callable_fn(*args, **kwargs)
@@ -306,6 +321,8 @@ def _get_formulas(
         formulas: list[str] = []
         per_head_limit = 4
         per_head_timeout = 1
+        generic_fetch_timeout = max(1, min(timeout, 2))
+        target_pool_size = max(DEFAULT_FORMULA_SAMPLE_LIMIT * 2, len(FORMULA_HEADS) * 6)
         head_sampling_budget = max(1.0, min(float(timeout), 3.0))
         started = time.monotonic()
 
@@ -315,7 +332,7 @@ def _get_formulas(
             heads = list(FORMULA_HEADS)
             rng.shuffle(heads)
             for head in heads:
-                if (time.monotonic() - started) >= head_sampling_budget:
+                if (time.monotonic() - started) >= head_sampling_budget or len(formulas) >= target_pool_size:
                     break
                 formulas.extend(
                     safe_fetch(
@@ -338,7 +355,7 @@ def _get_formulas(
             balanced_heads = ["or", "and", "iff"]
             rng.shuffle(balanced_heads)
             for head in balanced_heads:
-                if (time.monotonic() - started) >= head_sampling_budget:
+                if (time.monotonic() - started) >= head_sampling_budget or len(formulas) >= target_pool_size:
                     break
                 formulas.extend(
                     safe_fetch(
@@ -352,7 +369,6 @@ def _get_formulas(
                 )
 
         # 2) Riempi la capacita residua con campionamento vincolato generico.
-        target_pool_size = max(DEFAULT_FORMULA_SAMPLE_LIMIT * 2, len(FORMULA_HEADS) * 6)
         remaining = max(0, target_pool_size - len(formulas))
         if remaining > 0:
             if hasattr(bridge, "some_depth_allvars"):
@@ -362,7 +378,7 @@ def _get_formulas(
                         depth,
                         list(variables),
                         limit=remaining,
-                        timeout=timeout,
+                        timeout=generic_fetch_timeout,
                     )
                 )
             elif hasattr(bridge, "some_depth"):
@@ -372,13 +388,20 @@ def _get_formulas(
                         depth,
                         list(variables),
                         limit=remaining,
-                        timeout=timeout,
+                        timeout=generic_fetch_timeout,
                     )
                 )
             else:
-                formulas.extend(safe_fetch(bridge.formula_of_depth, depth, list(variables), timeout=timeout))
+                formulas.extend(
+                    safe_fetch(bridge.formula_of_depth, depth, list(variables), timeout=generic_fetch_timeout)
+                )
 
     filtered_formulas = [formula for formula in formulas if _uses_vars(formula, variables)]
+
+    if cache_key is not None:
+        if len(_FORMULA_FETCH_CACHE) >= FORMULA_FETCH_CACHE_MAX:
+            _FORMULA_FETCH_CACHE.pop(next(iter(_FORMULA_FETCH_CACHE)))
+        _FORMULA_FETCH_CACHE[cache_key] = tuple(filtered_formulas)
 
     # L'ordine di enumerazione Prolog e deterministico e puo introdurre bias
     # sui nomi (es. 'a' ricorre spesso sotto lo stesso operatore). Permuta
