@@ -290,6 +290,33 @@ class GeneratorTests(unittest.TestCase):
         self.assertTrue(seen_sets.issubset(allowed))
         self.assertEqual(seen_sets, allowed)
 
+    def test_tvq_requires_operator_diversity_across_options(self):
+        """Verifica che build_tvq rifiuti opzioni con solo un operatore principale."""
+
+        class SameHeadTvqBridge(FakeBridge):
+            def assignment(self, vars_list, timeout=10):
+                return [["p-true", "q-false"]]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                return [
+                    "and(p,q)",
+                    "and(q,p)",
+                    "and(not(p),q)",
+                    "and(p,not(q))",
+                ][:limit]
+
+            def eval(self, expr, valuation, timeout=10):
+                return expr == "and(p,q)"
+
+        with self.assertRaisesRegex(RuntimeError, "Impossibile trovare una assegnazione"):
+            build_tvq(
+                predicate_count=2,
+                true_options_count=1,
+                false_options_count=1,
+                seed=3,
+                bridge=_bridge(SameHeadTvqBridge()),
+            )
+
     def test_ex_few_preds_distinct(self):
         """Verifica che la formula modificata resti distinta con pochi predicati."""
         class FewPredicatesBridge(FakeBridge):

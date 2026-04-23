@@ -229,6 +229,14 @@ def _formula_head(formula: Any) -> str:
     return prolog_formula.split("(", 1)[0]
 
 
+def _has_operator_diversity(formulas: Sequence[str], minimum_distinct_heads: int = 2) -> bool:
+    """Verifica che l insieme di formule includa abbastanza operatori principali distinti."""
+    if minimum_distinct_heads <= 1:
+        return True
+    heads = {_formula_head(formula) for formula in formulas}
+    return len(heads) >= minimum_distinct_heads
+
+
 def _pick_by_head(
     formulas: Sequence[str],
     rng: random.Random,
@@ -1116,8 +1124,31 @@ def build_tvq(
         if len(true_candidates) < true_options_count or len(false_candidates) < false_options_count:
             continue
 
-        selected_true = rng.sample(true_candidates, true_options_count)
-        selected_false = rng.sample(false_candidates, false_options_count)
+        combined_candidates = true_candidates + false_candidates
+        if not _has_operator_diversity(combined_candidates):
+            continue
+
+        selected_true: list[str] | None = None
+        selected_false: list[str] | None = None
+
+        # Prova piu campionamenti per rispettare sia la distinzione pairwise
+        # sia il vincolo di differenza tra operatori principali.
+        sample_attempts = 12
+        for _ in range(sample_attempts):
+            trial_true = rng.sample(true_candidates, true_options_count)
+            trial_false = rng.sample(false_candidates, false_options_count)
+            trial_options = trial_true + trial_false
+            if len(set(trial_options)) != len(trial_options):
+                continue
+            if not _has_operator_diversity(trial_options):
+                continue
+            selected_true = trial_true
+            selected_false = trial_false
+            break
+
+        if selected_true is None or selected_false is None:
+            continue
+
         _require_pairwise_distinct(selected_true + selected_false, "build_tvq options")
 
         true_entries = [
