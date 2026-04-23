@@ -64,7 +64,7 @@ class ApiTests(unittest.TestCase):
         with patch("server.generator.build_tvq", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-truth-value-options-question",
-                json={"predicate_count": 2, "true_options_count": 1, "false_options_count": 1, "seed": 42},
+                json={"predicate_count": 4, "true_options_count": 1, "false_options_count": 1, "seed": 42},
             )
 
         self.assertEqual(response.status_code, 200)

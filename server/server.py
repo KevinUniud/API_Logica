@@ -127,7 +127,11 @@ class GeneratorExprRequest(FormulaRequest):
 
 
 class TruthValueOptionsRequest(RequestBase):
-    predicate_count: int = Field(ge=1, description="Numero di predicati atomici da usare nelle informazioni")
+    predicate_count: int = Field(
+        ge=4,
+        le=5,
+        description="Numero di predicati atomici (solo 4 o 5, per usare set variabili automatici)",
+    )
     true_options_count: int = Field(ge=1, description="Numero di opzioni che devono risultare vere")
     false_options_count: int = Field(ge=1, description="Numero di opzioni che devono risultare false")
     seed: int | None = Field(default=None, description="Seed casuale")
@@ -280,7 +284,7 @@ TRUTH_VALUE_OPTIONS_EXAMPLES = {
     "truth-value-options": {
         "summary": "Domanda con informazioni sui predicati e opzioni vere/false",
         "value": {
-            "predicate_count": 2,
+            "predicate_count": 4,
             "true_options_count": 2,
             "false_options_count": 2,
             "seed": 42,
