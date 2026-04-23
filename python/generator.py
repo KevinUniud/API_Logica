@@ -608,6 +608,16 @@ def _canonicalize_commutative(node: Any) -> Any:
     return node
 
 
+def _commutative_signature(formula: Any) -> str:
+    """Restituisce una firma canonica che collassa anche le inversioni commutative."""
+    return to_prolog(_canonicalize_commutative(_as_ast(formula)))
+
+
+def _same_formula_under_commutativity(left: Any, right: Any) -> bool:
+    """Verifica se due formule coincidono anche dopo l'ordinamento commutativo dei figli."""
+    return _commutative_signature(left) == _commutative_signature(right)
+
+
 def _is_effective_transformation(original: Any, candidate: Any) -> bool:
     """Verifica che la differenza non sia solo riordinamento commutativo dei figli."""
     original_text = _normalize_formula_text(original)
@@ -761,6 +771,55 @@ def generate_formula_json(
         bridge=bridge,
     ))
     result = formula_payload(expr, source="prolog_depth")
+    _ensure_keys(result, ["formula", "variables", "depth", "size", "formula_prolog", "source"])
+    return result
+
+
+def generate_formula_by_variable_count(
+    variable_count: int,
+    use_all: bool = False,
+    timeout: int = 10,
+    seed: int | None = None,
+    bridge: PrologBridge | None = None,
+) -> str:
+    """Genera una formula che usa esattamente il numero di variabili richiesto."""
+    _req_int_ge("variable_count", variable_count, 1)
+    _req_int_ge("timeout", int(timeout), 1)
+
+    variables = _default_vars(variable_count)
+    depth = _depth_from_var_count(variable_count)
+    return generate_formula(
+        depth=depth,
+        variables=variables,
+        use_all=use_all,
+        timeout=timeout,
+        seed=seed,
+        bridge=bridge,
+    )
+
+
+def generate_formula_by_variable_count_json(
+    variable_count: int,
+    use_all: bool = False,
+    timeout: int = 10,
+    seed: int | None = None,
+    bridge: PrologBridge | None = None,
+) -> dict:
+    """Genera una formula con N variabili e restituisce un payload pronto per JSON."""
+    _req_int_ge("variable_count", variable_count, 1)
+    _req_int_ge("timeout", int(timeout), 1)
+    formula = generate_formula_by_variable_count(
+        variable_count=variable_count,
+        use_all=use_all,
+        timeout=timeout,
+        seed=seed,
+        bridge=bridge,
+    )
+    result = formula_payload(
+        _as_ast(formula),
+        source="prolog_variable_count",
+        variable_count=variable_count,
+    )
     _ensure_keys(result, ["formula", "variables", "depth", "size", "formula_prolog", "source"])
     return result
 
@@ -1187,6 +1246,208 @@ def build_tvq(
     )
 
 
+def build_logical_consequence_question(
+    variable_count: int,
+    correct_options_count: int,
+    wrong_options_count: int,
+    timeout: int = 10,
+    seed: int | None = None,
+    operator_cycles: int | None = None,
+    bridge: PrologBridge | None = None,
+) -> dict:
+    """Costruisce un quiz di conseguenza logica con opzioni corrette/errate.
+
+    Semantica usata: `Q |= R` se ogni valutazione che rende vera la formula domanda `Q`
+    rende vera anche l'opzione `R`.
+    """
+    _req_int_ge("variable_count", variable_count, 1)
+    _req_int_ge("timeout", int(timeout), 1)
+    if correct_options_count < 1:
+        raise ValueError("correct_options_count deve essere >= 1")
+    if wrong_options_count < 1:
+        raise ValueError("wrong_options_count deve essere >= 1")
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
+
+    bridge = _ensure_bridge(bridge)
+    rng = random.Random(seed)
+    total_timeout = max(1, int(timeout))
+    deadline = time.monotonic() + total_timeout
+    required_options = correct_options_count + wrong_options_count
+    variables = _default_vars(variable_count)
+    question_formula = generate_formula_by_variable_count(
+        variable_count=variable_count,
+        use_all=False,
+        timeout=total_timeout,
+        seed=seed,
+        bridge=bridge,
+    )
+    question_expr = _as_ast(question_formula)
+    question_prolog = _as_prolog(question_formula)
+
+    def remaining_timeout(cap: int | None = None) -> int:
+        left = max(1, int(math.ceil(deadline - time.monotonic())))
+        return min(left, cap) if cap is not None else left
+
+    candidates: list[str] = []
+    seen_candidates: set[str] = {question_prolog}
+    seen_signatures: set[str] = {_commutative_signature(question_prolog)}
+    allowed_variables = set(variables)
+
+    def register_candidate(formula: str) -> None:
+        if not formula or formula in seen_candidates:
+            return
+        used_variables = collect_variables(_as_ast(formula))
+        if not used_variables.issubset(allowed_variables):
+            return
+        signature = _commutative_signature(formula)
+        if signature in seen_signatures:
+            return
+        seen_candidates.add(formula)
+        seen_signatures.add(signature)
+        candidates.append(formula)
+
+    def register_with_operator_cycles(formula: str) -> None:
+        transformed = _transform_answer_candidates(
+            formula=formula,
+            bridge=bridge,
+            rng=rng,
+            operator_cycles=operator_cycles,
+            timeout_provider=lambda: remaining_timeout(2),
+        )
+        for candidate in transformed:
+            register_candidate(candidate)
+
+    for variable in variables:
+        register_candidate(variable)
+        register_with_operator_cycles(f"not({variable})")
+
+    search_depth = max(2, _depth_from_var_count(variable_count) + 2)
+    target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
+
+    for depth in range(1, search_depth + 1):
+        fetched = _get_formulas(
+            bridge=bridge,
+            depth=depth,
+            variables=variables,
+            use_all=False,
+            timeout=remaining_timeout(3),
+            rng=rng,
+        )
+        for formula in fetched:
+            register_candidate(formula)
+        if len(candidates) >= target_candidate_count:
+            break
+
+    if len(candidates) < required_options:
+        raise RuntimeError("Non ci sono abbastanza formule candidate per il quiz di conseguenza logica")
+
+    implication_cache: dict[str, bool] = {}
+
+    def is_logical_consequence(candidate: str) -> bool:
+        if candidate in implication_cache:
+            return implication_cache[candidate]
+        try:
+            result = bool(
+                bridge.implies_formula(
+                    question_prolog,
+                    candidate,
+                    vars_list=variables,
+                    timeout=remaining_timeout(2),
+                )
+            )
+        except Exception:
+            result = False
+        implication_cache[candidate] = result
+        return result
+
+    consequence_candidates: list[str] = []
+    non_consequence_candidates: list[str] = []
+
+    shuffled_candidates = list(candidates)
+    rng.shuffle(shuffled_candidates)
+    for candidate in shuffled_candidates:
+        if is_logical_consequence(candidate):
+            consequence_candidates.append(candidate)
+        else:
+            non_consequence_candidates.append(candidate)
+        if (
+            len(consequence_candidates) >= correct_options_count
+            and len(non_consequence_candidates) >= wrong_options_count
+        ):
+            break
+
+    if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
+        raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
+
+    selected_correct: list[str] | None = None
+    selected_wrong: list[str] | None = None
+    sample_attempts = 12
+    for _ in range(sample_attempts):
+        trial_correct = rng.sample(consequence_candidates, correct_options_count)
+        trial_wrong = rng.sample(non_consequence_candidates, wrong_options_count)
+        trial_options = trial_correct + trial_wrong
+        if len(set(trial_options)) != len(trial_options):
+            continue
+        if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
+            continue
+        if not _has_operator_diversity(trial_options):
+            continue
+        # Validazione semantica esplicita per evitare mismatch tra classificazione
+        # iniziale e set finale selezionato.
+        if not all(is_logical_consequence(item) for item in trial_correct):
+            continue
+        if any(is_logical_consequence(item) for item in trial_wrong):
+            continue
+        selected_correct = trial_correct
+        selected_wrong = trial_wrong
+        break
+
+    if selected_correct is None or selected_wrong is None:
+        raise RuntimeError("Impossibile rispettare i vincoli di diversita nel quiz di conseguenza logica")
+
+    if len({_commutative_signature(option) for option in selected_correct + selected_wrong}) != len(
+        selected_correct + selected_wrong
+    ):
+        raise RuntimeError("Postcondizione fallita: formule non distinte nel quiz di conseguenza logica")
+
+    correct_entries = [
+        _formula_entry(formula, label=f"opzione conseguenza n{index}", is_consequence=True)
+        for index, formula in enumerate(selected_correct, start=1)
+    ]
+    wrong_entries = [
+        _formula_entry(formula, label=f"opzione non-conseguenza n{index}", is_consequence=False)
+        for index, formula in enumerate(selected_wrong, start=1)
+    ]
+
+    options = correct_entries + wrong_entries
+    rng.shuffle(options)
+
+    result = {
+        "type": "logical_consequence_question",
+        "variable_count": variable_count,
+        "correct_options_count": correct_options_count,
+        "wrong_options_count": wrong_options_count,
+        "consequence_semantics": "Q |= R: ogni valutazione che rende vera Q rende vera anche R",
+        "variables": variables,
+        "question": formula_to_dict(question_expr),
+        "question_prolog": question_prolog,
+        "options": options,
+        "correct_options": correct_entries,
+        "wrong_options": wrong_entries,
+        "source": "prolog_implies_formula",
+    }
+
+    for index, option in enumerate(options, start=1):
+        result[f"option_{index}"] = option
+
+    _ensure_keys(
+        result,
+        ["question", "question_prolog", "options", "correct_options", "wrong_options", "variables"],
+    )
+    return result
+
+
 def build_exercise(
     expr,
     wrong_answers_count: int = 3,
@@ -1492,6 +1753,37 @@ def build_tvq_json(
             predicate_count=predicate_count,
             true_options_count=true_options_count,
             false_options_count=false_options_count,
+            timeout=timeout,
+            seed=seed,
+            operator_cycles=operator_cycles,
+            bridge=bridge,
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def build_logical_consequence_question_json(
+    variable_count: int,
+    correct_options_count: int,
+    wrong_options_count: int,
+    timeout: int = 10,
+    seed: int | None = None,
+    operator_cycles: int | None = None,
+    bridge: PrologBridge | None = None,
+) -> str:
+    """Serializza l output del quiz di conseguenza logica come stringa JSON."""
+    _req_int_ge("variable_count", variable_count, 1)
+    _req_int_ge("correct_options_count", correct_options_count, 1)
+    _req_int_ge("wrong_options_count", wrong_options_count, 1)
+    _req_int_ge("timeout", int(timeout), 1)
+    if operator_cycles is not None:
+        _req_int_ge("operator_cycles", operator_cycles, 0)
+    return json.dumps(
+        build_logical_consequence_question(
+            variable_count=variable_count,
+            correct_options_count=correct_options_count,
+            wrong_options_count=wrong_options_count,
             timeout=timeout,
             seed=seed,
             operator_cycles=operator_cycles,

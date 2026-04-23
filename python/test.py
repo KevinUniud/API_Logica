@@ -5,7 +5,9 @@ from typing import cast
 
 from ast_logic import And, Iff, Imp, Not, Or, Var
 from generator import build_ex_depth
+from generator import build_logical_consequence_question
 from generator import build_tvq
+from generator import generate_formula_by_variable_count
 from generator import generate_formula
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
@@ -316,6 +318,142 @@ class GeneratorTests(unittest.TestCase):
                 seed=3,
                 bridge=_bridge(SameHeadTvqBridge()),
             )
+
+    def test_generate_formula_by_variable_count_uses_requested_count(self):
+        """Verifica che la formula generata usi esattamente il numero richiesto di variabili."""
+
+        class VariableCountBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                vars_tuple = tuple(variables)
+                if vars_tuple == ("p", "q", "r"):
+                    return [
+                        "and(p,or(q,r))",
+                        "or(p,and(q,r))",
+                        "imp(and(p,q),r)",
+                    ][:limit]
+                return []
+
+        formula = generate_formula_by_variable_count(
+            variable_count=3,
+            seed=5,
+            bridge=_bridge(VariableCountBridge()),
+        )
+        self.assertEqual(collect_variables(from_prolog(formula)), {"p", "q", "r"})
+
+    def test_logical_consequence_question_true_false_partition(self):
+        """Verifica che il quiz di conseguenza separi correttamente opzioni implicate e non implicate."""
+
+        class ConsequenceBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                vars_tuple = tuple(variables)
+                if vars_tuple != ("p", "q", "r"):
+                    return []
+                formulas = [
+                    "and(p,or(q,r))",
+                    "or(p,and(q,r))",
+                    "imp(and(p,q),r)",
+                    "iff(and(p,q),r)",
+                    "and(p,and(q,r))",
+                    "or(and(p,q),r)",
+                    "imp(p,or(q,r))",
+                    "iff(p,or(q,r))",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                implied = {
+                    "imp(and(p,q),r)",
+                    "or(and(p,q),r)",
+                    "imp(p,or(q,r))",
+                }
+                return right in implied
+
+        question = build_logical_consequence_question(
+            variable_count=3,
+            correct_options_count=2,
+            wrong_options_count=2,
+            seed=7,
+            bridge=_bridge(ConsequenceBridge()),
+        )
+
+        self.assertEqual(question["variable_count"], 3)
+        self.assertIn("consequence_semantics", question)
+        self.assertEqual(len(question["correct_options"]), 2)
+        self.assertEqual(len(question["wrong_options"]), 2)
+        self.assertTrue(all(entry["is_consequence"] for entry in question["correct_options"]))
+        self.assertTrue(all(not entry["is_consequence"] for entry in question["wrong_options"]))
+        option_heads = {entry["formula_prolog"].split("(", 1)[0] for entry in question["options"]}
+        self.assertGreaterEqual(len(option_heads), 2)
+
+    def test_logical_consequence_known_entailment_is_correct(self):
+        """Verifica il caso noto: imp(and(p,q),and(r,s)) |= imp(and(p,q),or(r,s))."""
+
+        class KnownEntailmentBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                if tuple(variables) != ("p", "q", "r", "s"):
+                    return []
+                if depth == 2:
+                    # Stabilizza la domanda generata dal builder.
+                    return ["imp(and(p,q),and(r,s))"]
+                formulas = [
+                    "imp(and(p,q),or(r,s))",
+                    "iff(and(p,q),or(r,s))",
+                    "and(and(p,q),imp(r,s))",
+                    "iff(and(p,q),imp(r,s))",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                if left != "imp(and(p,q),and(r,s))":
+                    return False
+                return right == "imp(and(p,q),or(r,s))"
+
+        question = build_logical_consequence_question(
+            variable_count=4,
+            correct_options_count=1,
+            wrong_options_count=3,
+            seed=13,
+            bridge=_bridge(KnownEntailmentBridge()),
+        )
+
+        self.assertEqual(question["question_prolog"], "imp(and(p,q),and(r,s))")
+        self.assertIn(
+            "imp(and(p,q),or(r,s))",
+            [entry["formula_prolog"] for entry in question["correct_options"]],
+        )
+
+    def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
+        """Verifica che una conseguenza piu semplice sia ammessa, ma non le varianti duplicate per commutazione."""
+
+        class SimpleConsequenceBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                if tuple(variables) != ("p", "q"):
+                    return []
+                if depth == 2:
+                    return ["and(p,q)"]
+                formulas = [
+                    "p",
+                    "q",
+                    "and(q,p)",
+                    "or(p,q)",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                # `and(p,q) |= p` è valido, mentre la variante commutativa della domanda va scartata.
+                return right == "p"
+
+        question = build_logical_consequence_question(
+            variable_count=2,
+            correct_options_count=1,
+            wrong_options_count=1,
+            seed=19,
+            bridge=_bridge(SimpleConsequenceBridge()),
+        )
+
+        self.assertEqual(question["question_prolog"], "and(p,q)")
+        self.assertEqual([entry["formula_prolog"] for entry in question["correct_options"]], ["p"])
+        self.assertNotIn("and(q,p)", [entry["formula_prolog"] for entry in question["options"]])
 
     def test_ex_few_preds_distinct(self):
         """Verifica che la formula modificata resti distinta con pochi predicati."""

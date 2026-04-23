@@ -22,6 +22,8 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(schema["openapi"], "3.1.0")
         self.assertIn("/api/generator/build-exercise-from-depth", schema["paths"])
+        self.assertIn("/api/generator/generate-formula-by-variable-count", schema["paths"])
+        self.assertIn("/api/generator/build-logical-consequence-question", schema["paths"])
         self.assertIn("/api/prolog-bridge/logic/eval", schema["paths"])
         self.assertIn("/api/prolog-bridge/distractions/one-step-distraction", schema["paths"])
 
@@ -72,6 +74,48 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(payload["operation"], "generator_build_tvq")
         self.assertEqual(payload["result"]["information"], ["p-true", "q-false"])
+        self.assertEqual(len(payload["result"]["options"]), 2)
+
+    def test_formula_by_variable_count_endpoint(self):
+        """Verifica l'endpoint che genera formula con numero variabili specifico."""
+        fake_result = "and(p,or(q,r))"
+        with patch("server.generator.generate_formula_by_variable_count", return_value=fake_result):
+            response = self.client.post(
+                "/api/generator/generate-formula-by-variable-count",
+                json={"variable_count": 3, "seed": 42},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["operation"], "generator_generate_formula_by_variable_count")
+        self.assertEqual(payload["result"], fake_result)
+
+    def test_logical_consequence_endpoint(self):
+        """Verifica l'endpoint per il quiz di conseguenza logica."""
+        fake_result = {
+            "question_prolog": "and(p,or(q,r))",
+            "correct_options": [{"formula_prolog": "imp(p,or(q,r))", "is_consequence": True}],
+            "wrong_options": [{"formula_prolog": "iff(p,q)", "is_consequence": False}],
+            "options": [
+                {"formula_prolog": "imp(p,or(q,r))", "is_consequence": True},
+                {"formula_prolog": "iff(p,q)", "is_consequence": False},
+            ],
+        }
+        with patch("server.generator.build_logical_consequence_question", return_value=fake_result):
+            response = self.client.post(
+                "/api/generator/build-logical-consequence-question",
+                json={
+                    "variable_count": 3,
+                    "correct_options_count": 1,
+                    "wrong_options_count": 1,
+                    "seed": 42,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["operation"], "generator_build_logical_consequence_question")
+        self.assertEqual(payload["result"]["question_prolog"], "and(p,or(q,r))")
         self.assertEqual(len(payload["result"]["options"]), 2)
 
     def test_template_endpoint(self):
