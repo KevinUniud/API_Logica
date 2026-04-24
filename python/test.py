@@ -9,6 +9,7 @@ from generator import build_logical_consequence_question
 from generator import build_tvq
 from generator import generate_formula_by_variable_count
 from generator import generate_formula
+from generator import _formula_has_non_banal_repetitions
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
 
@@ -743,6 +744,39 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertIn(0, observed_repetitions)
         self.assertTrue(any(count > 0 for count in observed_repetitions))
+
+    def test_generate_formula_avoids_banal_repetitions(self):
+        """Verifica che le formule con ripetizioni non siano solo duplicati banali."""
+
+        class NonBanalRepetitionBridge:
+            def some_depth(self, depth, variables, limit, timeout=10):
+                formulas = [
+                    "and(p,p)",
+                    "or(p,p)",
+                    "and(p,or(q,p))",
+                    "or(p,and(q,p))",
+                    "imp(p,or(q,p))",
+                    "and(p,q)",
+                ]
+                return formulas[:limit]
+
+        banal_formulas = {"and(p,p)", "or(p,p)", "imp(p,p)", "iff(p,p)"}
+        seen_repeated = False
+
+        for seed in range(30):
+            formula = generate_formula(
+                depth=2,
+                variables=["p", "q"],
+                seed=seed,
+                bridge=_bridge(NonBanalRepetitionBridge()),
+            )
+            repetition_count = _count_atom_repetitions(formula)
+            if repetition_count > 0:
+                seen_repeated = True
+                self.assertTrue(_formula_has_non_banal_repetitions(formula))
+                self.assertNotIn(formula, banal_formulas)
+
+        self.assertTrue(seen_repeated)
 
     def test_wrong_answers_only_q_vars(self):
         """Verifica che i distractor usino solo le variabili della domanda."""

@@ -24,6 +24,7 @@ FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
 FORMULA_FETCH_CACHE_MAX = 64
 MAX_FORMULA_ATOM_REPETITIONS = 3
 FORMULA_REPETITION_PROBABILITY = 0.5
+MIN_FORMULA_ATOM_REPETITION_DISTANCE = 3
 MAX_MODIFIED_EQUIV_CHECKS = 8
 DISTRACTION_CANDIDATE_MULTIPLIER = 4
 MAX_AUTOMATIC_TRANSFORM_CYCLES = 8
@@ -307,7 +308,7 @@ def _pick_formula_with_repetition_policy(
     repeated_formulas = [
         formula
         for formula in candidate_pool
-        if _formula_atom_repetition_count(formula) > 0
+        if _formula_has_non_banal_repetitions(formula)
     ]
     unique_formulas = [
         formula
@@ -329,7 +330,7 @@ def _pick_formula_with_repetition_policy(
                 variables=variables,
                 max_repetitions=max_repetitions,
             )
-            if repeated_formula is not None:
+            if repeated_formula is not None and _formula_has_non_banal_repetitions(repeated_formula):
                 return repeated_formula
 
     if unique_formulas:
@@ -553,6 +554,39 @@ def _formula_atom_repetition_count(expr) -> int:
     return sum(count - 1 for count in atom_counts.values() if count > 1)
 
 
+def _leaf_path_distance(left_path: tuple[str, ...], right_path: tuple[str, ...]) -> int:
+    """Calcola la distanza strutturale tra due foglie dell'albero AST."""
+    shared_prefix = 0
+    for left_step, right_step in zip(left_path, right_path):
+        if left_step != right_step:
+            break
+        shared_prefix += 1
+    return len(left_path) + len(right_path) - (2 * shared_prefix)
+
+
+def _formula_has_non_banal_repetitions(
+    expr,
+    min_distance: int = MIN_FORMULA_ATOM_REPETITION_DISTANCE,
+) -> bool:
+    """Verifica che eventuali ripetizioni abbiano un distacco minimo nell'albero."""
+    leaf_paths = _collect_variable_leaf_paths(expr)
+    by_atom: dict[str, list[tuple[str, ...]]] = {}
+    for path, atom_name in leaf_paths:
+        by_atom.setdefault(atom_name, []).append(path)
+
+    has_repetition = False
+    for paths in by_atom.values():
+        if len(paths) < 2:
+            continue
+        has_repetition = True
+        for index, left_path in enumerate(paths):
+            for right_path in paths[index + 1 :]:
+                if _leaf_path_distance(left_path, right_path) < min_distance:
+                    return False
+
+    return has_repetition
+
+
 def _collect_variable_leaf_paths(expr) -> list[tuple[tuple[str, ...], str]]:
     """Raccoglie i percorsi delle foglie variabile in una formula AST."""
     ast = _as_ast(expr)
@@ -610,7 +644,7 @@ def _introduce_atom_repetitions(
     if current_repetitions > max_repetitions:
         return None
     if current_repetitions > 0:
-        return to_prolog(ast)
+        return to_prolog(ast) if _formula_has_non_banal_repetitions(ast) else None
 
     leaf_paths = _collect_variable_leaf_paths(ast)
     if len(leaf_paths) < 2:
@@ -647,7 +681,7 @@ def _introduce_atom_repetitions(
         transformed_prolog = to_prolog(transformed)
         if variables is not None and not _uses_vars(transformed_prolog, variables):
             continue
-        if _formula_atom_repetition_count(transformed) <= max_repetitions:
+        if _formula_atom_repetition_count(transformed) <= max_repetitions and _formula_has_non_banal_repetitions(transformed):
             return transformed_prolog
 
     return None
