@@ -1298,6 +1298,8 @@ def build_tvq(
             "variables": variables,
             "information": list(valuation),
             "options": options,
+            "true_options": [_formula_entry(formula, is_true=True) for formula in selected_true],
+            "false_options": [_formula_entry(formula, is_true=False) for formula in selected_false],
             "source": "prolog_assignment_and_eval",
         }
 
@@ -1438,6 +1440,8 @@ def build_logical_consequence_question(
         "variables": variables,
         "question_prolog": question_prolog,
         "options": options,
+        "correct_options": [_formula_entry(formula, is_consequence=True) for formula in selected_correct],
+        "wrong_options": [_formula_entry(formula, is_consequence=False) for formula in selected_wrong],
         "source": "prolog_implies_formula",
     }
 
@@ -1580,6 +1584,12 @@ def build_exercise(
         "correct_answer_prolog": modified_prolog,
         "wrong_answers_prolog": wrong_selected,
     }
+
+    for index, wrong_formula in enumerate(wrong_selected, start=1):
+        exercise[f"distraction_{index}"] = _formula_entry(
+            wrong_formula,
+            label=f"formula distrazione n{index}",
+        )
 
     _ensure_keys(exercise, ["original_formula", "modified_formula", "wrong_answers_prolog"])
     if len(exercise["wrong_answers_prolog"]) < wrong_answers_count:
