@@ -150,6 +150,24 @@ class LogicalConsequenceQuestionRequest(RequestBase):
     seed: int | None = Field(default=None, description="Seed casuale")
 
 
+class TranslationQuestionRequest(ApiModel):
+    mode: str = Field(description="Modalita di generazione: auto, quantifier, propositional")
+    quantifier_ratio: float = Field(ge=0, le=1, description="Probabilita subtype quantifier quando mode=auto")
+    wrong_options_count: int = Field(default=3, ge=1, description="Numero di opzioni sbagliate")
+    names_pool: list[str] = Field(description="Pool ufficiale nomi frontend")
+    actions_pool: list[str] = Field(description="Pool ufficiale azioni frontend")
+    implied_person_predicate: bool = Field(
+        default=True,
+        description="Se true, non include P(x)=x è una persona nelle info del quiz quantificato",
+    )
+    allow_spoken_mode: bool = Field(
+        default=False,
+        description="Flag mantenuto per compatibilita del contratto",
+    )
+    seed: int | None = Field(default=None, description="Seed casuale")
+    timeout_seconds: int = Field(default=10, ge=1, le=120, description="Timeout della chiamata in secondi")
+
+
 class OperationResponse(ApiModel):
     operation: str
     result: Any
@@ -327,6 +345,23 @@ LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES = {
             "wrong_options_count": 2,
             "seed": 42,
             "timeout": 10,
+        },
+    }
+}
+
+TRANSLATION_QUESTION_EXAMPLES = {
+    "translation-question": {
+        "summary": "Quiz di traduzione italiano -> logica",
+        "value": {
+            "mode": "auto",
+            "quantifier_ratio": 0.5,
+            "wrong_options_count": 3,
+            "names_pool": ["Luca", "Matteo", "Alessandro", "Marco", "Davide", "Giulia", "Sofia", "Martina", "Chiara", "Elisa"],
+            "actions_pool": ["nuota", "corre", "salta", "guarda", "parla", "apre", "chiude", "ascolta"],
+            "implied_person_predicate": True,
+            "allow_spoken_mode": False,
+            "seed": 12345,
+            "timeout_seconds": 10,
         },
     }
 }
@@ -778,6 +813,7 @@ for path_suffix, operation_id, summary, payload_model, examples, handler in [
     ("build-exercise-from-depth", "generator_build_ex_depth", "Costruisce un esercizio con variabili automatiche (profondita automatica)", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
     ("build-truth-value-options-question", "generator_build_tvq", "Costruisce una domanda da informazioni booleane sui predicati e opzioni vere/false", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
     ("build-logical-consequence-question", "generator_build_logical_consequence_question", "Costruisce un quiz di conseguenza logica con opzioni corrette e errate", LogicalConsequenceQuestionRequest, LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES, lambda payload: generator.build_logical_consequence_question(variable_count=payload.variable_count, correct_options_count=payload.correct_options_count, wrong_options_count=payload.wrong_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
+    ("build-translation-question", "generator_build_translation_question", "Costruisce un quiz di traduzione italiano -> logica", TranslationQuestionRequest, TRANSLATION_QUESTION_EXAMPLES, lambda payload: generator.build_translation_question(mode=payload.mode, quantifier_ratio=payload.quantifier_ratio, wrong_options_count=payload.wrong_options_count, names_pool=payload.names_pool, actions_pool=payload.actions_pool, implied_person_predicate=payload.implied_person_predicate, allow_spoken_mode=payload.allow_spoken_mode, seed=payload.seed, timeout=payload.timeout_seconds)),
     ("build-exercise-json-string", "generator_build_ex_json", "Costruisce un esercizio e lo serializza come stringa JSON", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_ex_json(expr=payload.expr, bridge=_build_bridge(), seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, timeout=payload.timeout)),
     ("build-exercise-from-depth-json-string", "generator_build_ex_depth_json", "Costruisce un esercizio con variabili automatiche e lo serializza come stringa JSON", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth_json(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
     ("build-truth-value-options-question-json-string", "generator_build_tvq_json", "Costruisce la domanda con opzioni vere/false e la serializza come JSON", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq_json(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),

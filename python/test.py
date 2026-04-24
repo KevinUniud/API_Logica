@@ -7,6 +7,7 @@ from ast_logic import And, Iff, Imp, Not, Or, Var
 from generator import build_ex_depth
 from generator import build_logical_consequence_question
 from generator import build_tvq
+from generator import build_translation_question
 from generator import generate_formula_by_variable_count
 from generator import generate_formula
 from generator import _formula_has_non_banal_repetitions
@@ -1059,6 +1060,66 @@ class GeneratorTests(unittest.TestCase):
 
         exercise = build_ex_depth(depth=2, wrong_answers_count=2, seed=31, bridge=_bridge(TwoStepBridge()))
         self.assertGreaterEqual(exercise["rewrite_steps"], 2)
+
+    def test_translation_question_propositional_contract(self):
+        """Verifica il contratto del quiz di traduzione in modalita proposizionale."""
+        result = build_translation_question(
+            mode="propositional",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo", "Giulia"],
+            actions_pool=["corre", "salta"],
+            implied_person_predicate=True,
+            allow_spoken_mode=False,
+            seed=42,
+            timeout=10,
+        )
+
+        self.assertEqual(result["type"], "translation_question")
+        self.assertEqual(result["subtype"], "propositional")
+        self.assertEqual(len(result["options"]), 4)
+        self.assertEqual(sum(1 for item in result["options"] if item["is_correct"]), 1)
+        self.assertEqual(result["wrong_options_count"], 3)
+        for option in result["options"]:
+            self.assertNotIn("forall(", option["formula"])
+            self.assertNotIn("exists(", option["formula"])
+            self.assertNotIn("x", option["formula"])
+
+    def test_translation_question_quantifier_contract(self):
+        """Verifica il contratto del quiz di traduzione in modalita quantifier."""
+        result = build_translation_question(
+            mode="quantifier",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo", "Giulia"],
+            actions_pool=["corre", "salta", "nuota"],
+            implied_person_predicate=True,
+            allow_spoken_mode=False,
+            seed=7,
+            timeout=10,
+        )
+
+        self.assertEqual(result["type"], "translation_question")
+        self.assertEqual(result["subtype"], "quantifier")
+        self.assertEqual(len(result["options"]), 4)
+        self.assertEqual(sum(1 for item in result["options"] if item["is_correct"]), 1)
+        self.assertEqual(len({item["formula"] for item in result["options"]}), 4)
+        self.assertTrue(all("P(x) = x è una persona" != info for info in result["info"]))
+
+    def test_translation_question_requires_wrong_options_count_three(self):
+        """Verifica che il builder rifiuti wrong_options_count diverso da 3."""
+        with self.assertRaisesRegex(ValueError, "wrong_options_count deve essere 3"):
+            build_translation_question(
+                mode="auto",
+                quantifier_ratio=0.5,
+                wrong_options_count=2,
+                names_pool=["Luca", "Matteo"],
+                actions_pool=["corre", "salta"],
+                implied_person_predicate=True,
+                allow_spoken_mode=False,
+                seed=1,
+                timeout=10,
+            )
 
 
 class PrologBridgeTests(unittest.TestCase):

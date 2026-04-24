@@ -24,6 +24,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("/api/generator/build-exercise-from-depth", schema["paths"])
         self.assertIn("/api/generator/generate-formula-by-variable-count", schema["paths"])
         self.assertIn("/api/generator/build-logical-consequence-question", schema["paths"])
+        self.assertIn("/api/generator/build-translation-question", schema["paths"])
         self.assertIn("/api/prolog-bridge/logic/eval", schema["paths"])
         self.assertIn("/api/prolog-bridge/distractions/one-step-distraction", schema["paths"])
 
@@ -139,6 +140,50 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.assertIn("Impossibile trovare abbastanza opzioni", response.json()["detail"])
+
+    def test_translation_question_endpoint(self):
+        """Verifica l'endpoint per il quiz di traduzione italiano -> logica."""
+        fake_result = {
+            "type": "translation_question",
+            "subtype": "propositional",
+            "question_text": "Tradurre la seguente frase in linguaggio logico: \"Se Giulia corre allora Marco corre\"",
+            "info": ["P = Giulia corre", "Q = Marco corre"],
+            "options": [
+                {"formula": "imp(P,Q)", "is_correct": True},
+                {"formula": "imp(Q,P)", "is_correct": False},
+                {"formula": "and(P,Q)", "is_correct": False},
+                {"formula": "imp(not(P),Q)", "is_correct": False},
+            ],
+            "correct_options_count": 1,
+            "wrong_options_count": 3,
+            "metadata": {
+                "quantifier_used": "none",
+                "names_used": ["Giulia", "Marco"],
+                "actions_used": ["corre"],
+                "source": "rule_generator",
+            },
+        }
+        with patch("server.generator.build_translation_question", return_value=fake_result):
+            response = self.client.post(
+                "/api/generator/build-translation-question",
+                json={
+                    "mode": "auto",
+                    "quantifier_ratio": 0.5,
+                    "wrong_options_count": 3,
+                    "names_pool": ["Giulia", "Marco"],
+                    "actions_pool": ["corre", "salta"],
+                    "implied_person_predicate": True,
+                    "allow_spoken_mode": False,
+                    "seed": 42,
+                    "timeout_seconds": 10,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["operation"], "generator_build_translation_question")
+        self.assertEqual(payload["result"]["type"], "translation_question")
+        self.assertEqual(payload["result"]["wrong_options_count"], 3)
 
     def test_template_endpoint(self):
         """Verifica l'endpoint template con bridge mockato."""

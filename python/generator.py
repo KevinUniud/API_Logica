@@ -1992,3 +1992,191 @@ def build_logical_consequence_question_json(
             bridge=bridge,
         )
     )
+
+
+def _pick_translation_subtype(mode: str, quantifier_ratio: float, rng: random.Random) -> str:
+    """Risolve il sottotipo del quiz di traduzione a partire dal mode richiesto."""
+    if mode == "quantifier":
+        return "quantifier"
+    if mode == "propositional":
+        return "propositional"
+    if mode == "auto":
+        return "quantifier" if rng.random() < quantifier_ratio else "propositional"
+    raise ValueError("mode deve essere uno tra: auto, quantifier, propositional")
+
+
+def _build_translation_question_propositional(
+    *,
+    names_pool: Sequence[str],
+    actions_pool: Sequence[str],
+    rng: random.Random,
+) -> dict[str, Any]:
+    """Costruisce un quiz di traduzione in logica proposizionale."""
+    if len(names_pool) < 2:
+        raise ValueError("names_pool deve contenere almeno 2 nomi")
+    if len(actions_pool) < 1:
+        raise ValueError("actions_pool deve contenere almeno 1 azione")
+
+    subject_name, target_name = rng.sample(list(names_pool), 2)
+    action = rng.choice(list(actions_pool))
+
+    question_text = (
+        "Tradurre la seguente frase in linguaggio logico: "
+        f'"Se {subject_name} {action} allora {target_name} {action}"'
+    )
+    info = [
+        f"P = {subject_name} {action}",
+        f"Q = {target_name} {action}",
+    ]
+
+    correct_formula = "imp(P,Q)"
+    wrong_formulas = ["imp(Q,P)", "and(P,Q)", "imp(not(P),Q)"]
+    options = [
+        {"formula": correct_formula, "is_correct": True},
+        *({"formula": item, "is_correct": False} for item in wrong_formulas),
+    ]
+    rng.shuffle(options)
+
+    return {
+        "type": "translation_question",
+        "subtype": "propositional",
+        "question_text": question_text,
+        "info": info,
+        "options": options,
+        "correct_options_count": 1,
+        "wrong_options_count": 3,
+        "metadata": {
+            "quantifier_used": "none",
+            "names_used": [subject_name, target_name],
+            "actions_used": [action],
+            "source": "rule_generator",
+        },
+    }
+
+
+def _build_translation_question_quantifier(
+    *,
+    actions_pool: Sequence[str],
+    implied_person_predicate: bool,
+    rng: random.Random,
+) -> dict[str, Any]:
+    """Costruisce un quiz di traduzione con quantificatori."""
+    if len(actions_pool) < 2:
+        raise ValueError("actions_pool deve contenere almeno 2 azioni per il subtype quantifier")
+
+    action_left, action_right = rng.sample(list(actions_pool), 2)
+    left_symbol = "A"
+    right_symbol = "B"
+    quantifier_used = rng.choice(["per_ogni", "esiste"])
+
+    if quantifier_used == "per_ogni":
+        question_text = (
+            "Tradurre la seguente frase in linguaggio logico: "
+            f'"Ogni persona {action_left} e {action_right}"'
+        )
+        correct_formula = "forall(x,imp(P(x),and(A(x),B(x))))"
+        wrong_formulas = [
+            "exists(x,and(P(x),and(A(x),B(x))))",
+            "forall(x,and(P(x),and(A(x),B(x))))",
+            "forall(x,imp(and(A(x),B(x)),P(x)))",
+        ]
+    else:
+        question_text = (
+            "Tradurre la seguente frase in linguaggio logico: "
+            f'"Esiste una persona che {action_left} e {action_right}"'
+        )
+        correct_formula = "exists(x,and(P(x),and(A(x),B(x))))"
+        wrong_formulas = [
+            "forall(x,imp(P(x),and(A(x),B(x))))",
+            "exists(x,imp(P(x),and(A(x),B(x))))",
+            "exists(x,and(P(x),or(A(x),B(x))))",
+        ]
+
+    info = [
+        f"{left_symbol}(x) = x {action_left}",
+        f"{right_symbol}(x) = x {action_right}",
+    ]
+    if not implied_person_predicate:
+        info.insert(0, "P(x) = x è una persona")
+
+    options = [
+        {"formula": correct_formula, "is_correct": True},
+        *({"formula": item, "is_correct": False} for item in wrong_formulas),
+    ]
+    rng.shuffle(options)
+
+    return {
+        "type": "translation_question",
+        "subtype": "quantifier",
+        "question_text": question_text,
+        "info": info,
+        "options": options,
+        "correct_options_count": 1,
+        "wrong_options_count": 3,
+        "metadata": {
+            "quantifier_used": quantifier_used,
+            "names_used": [],
+            "actions_used": [action_left, action_right],
+            "source": "rule_generator",
+        },
+    }
+
+
+def build_translation_question(
+    *,
+    mode: str,
+    quantifier_ratio: float,
+    wrong_options_count: int = 3,
+    names_pool: Sequence[str],
+    actions_pool: Sequence[str],
+    implied_person_predicate: bool,
+    allow_spoken_mode: bool,
+    seed: int | None = None,
+    timeout: int = 10,
+) -> dict[str, Any]:
+    """Costruisce un quiz di traduzione italiano -> logica con 4 opzioni totali."""
+    _req_int_ge("timeout", int(timeout), 1)
+    if wrong_options_count != 3:
+        raise ValueError("wrong_options_count deve essere 3")
+    if not (0 <= quantifier_ratio <= 1):
+        raise ValueError("quantifier_ratio deve essere compreso tra 0 e 1")
+    if not names_pool:
+        raise ValueError("names_pool non può essere vuoto")
+    if not actions_pool:
+        raise ValueError("actions_pool non può essere vuoto")
+
+    # Campo mantenuto nel contratto per compatibilita futura: al momento non altera la generazione.
+    _ = allow_spoken_mode
+
+    rng = random.Random(seed)
+    subtype = _pick_translation_subtype(mode, quantifier_ratio, rng)
+    if subtype == "quantifier":
+        result = _build_translation_question_quantifier(
+            actions_pool=actions_pool,
+            implied_person_predicate=implied_person_predicate,
+            rng=rng,
+        )
+    else:
+        result = _build_translation_question_propositional(
+            names_pool=names_pool,
+            actions_pool=actions_pool,
+            rng=rng,
+        )
+
+    options = result["options"]
+    if len(options) != 4:
+        raise RuntimeError("Postcondizione fallita: le opzioni devono essere esattamente 4")
+    if sum(1 for option in options if option["is_correct"]) != 1:
+        raise RuntimeError("Postcondizione fallita: deve esserci esattamente 1 opzione corretta")
+    if len({option["formula"] for option in options}) != len(options):
+        raise RuntimeError("Postcondizione fallita: le opzioni devono essere tutte distinte")
+
+    if subtype == "propositional":
+        for option in options:
+            formula = option["formula"]
+            if "x" in formula or "forall(" in formula or "exists(" in formula:
+                raise RuntimeError("Postcondizione fallita: formula proposizionale non valida")
+
+    result["metadata"]["seed"] = seed
+    _ensure_keys(result, ["type", "subtype", "question_text", "info", "options", "metadata"])
+    return result
