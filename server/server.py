@@ -506,6 +506,12 @@ def value_err(_, exc: ValueError):
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
+@app.exception_handler(RuntimeError)
+def runtime_err(_, exc: RuntimeError):
+    """Converte errori runtime applicativi (es. generazione impossibile) in HTTP 422."""
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
 @app.get("/", tags=["meta"], summary="Informazioni sul servizio")
 def home() -> dict[str, Any]:
     """Restituisce metadati base e link di documentazione del servizio."""

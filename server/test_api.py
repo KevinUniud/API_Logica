@@ -121,6 +121,25 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("correct_options", payload["result"])
         self.assertNotIn("wrong_options", payload["result"])
 
+    def test_logical_consequence_runtime_error_is_422(self):
+        """Verifica che gli errori runtime del generatore vengano esposti come 422."""
+        with patch(
+            "server.generator.build_logical_consequence_question",
+            side_effect=RuntimeError("Impossibile trovare abbastanza opzioni"),
+        ):
+            response = self.client.post(
+                "/api/generator/build-logical-consequence-question",
+                json={
+                    "variable_count": 3,
+                    "correct_options_count": 1,
+                    "wrong_options_count": 3,
+                    "seed": 42,
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Impossibile trovare abbastanza opzioni", response.json()["detail"])
+
     def test_template_endpoint(self):
         """Verifica l'endpoint template con bridge mockato."""
         fake_bridge = Mock()

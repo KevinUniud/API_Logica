@@ -33,6 +33,28 @@ def _count_atoms(prolog_formula: str) -> int:
     return walk(ast)
 
 
+def _count_atom_repetitions(prolog_formula: str) -> int:
+    """Conta le occorrenze ripetute degli atomi in una formula Prolog."""
+    ast = from_prolog(prolog_formula)
+    counts = Counter()
+
+    def walk(node):
+        if isinstance(node, Var):
+            counts[node.name] += 1
+            return
+        if isinstance(node, Not):
+            walk(node.expr)
+            return
+        if isinstance(node, (And, Or, Imp, Iff)):
+            walk(node.left)
+            walk(node.right)
+            return
+        raise TypeError(f"Nodo non supportato: {type(node)!r}")
+
+    walk(ast)
+    return sum(count - 1 for count in counts.values() if count > 1)
+
+
 class FakeBridge:
     def __init__(self):
         """Inizializza lo stato del double di test."""
@@ -693,6 +715,34 @@ class GeneratorTests(unittest.TestCase):
         observed = [counts[head] for head in ["and", "or", "imp", "iff", "not"]]
         self.assertTrue(all(value > 0 for value in observed))
         self.assertLessEqual(max(observed) - min(observed), 25)
+
+    def test_generate_formula_uses_repetition_policy_with_budget(self):
+        """Verifica che la generazione produca sia formule ripetute sia non ripetute, senza superare il budget."""
+
+        class RepetitionPolicyBridge:
+            def some_depth(self, depth, variables, limit, timeout=10):
+                formulas = [
+                    "and(p,q)",
+                    "or(p,q)",
+                    "and(p,p)",
+                    "or(p,and(p,q))",
+                ]
+                return formulas[:limit]
+
+        observed_repetitions = set()
+        for seed in range(20):
+            formula = generate_formula(
+                depth=2,
+                variables=["p", "q"],
+                seed=seed,
+                bridge=_bridge(RepetitionPolicyBridge()),
+            )
+            repetition_count = _count_atom_repetitions(formula)
+            observed_repetitions.add(repetition_count)
+            self.assertLessEqual(repetition_count, 3)
+
+        self.assertIn(0, observed_repetitions)
+        self.assertTrue(any(count > 0 for count in observed_repetitions))
 
     def test_wrong_answers_only_q_vars(self):
         """Verifica che i distractor usino solo le variabili della domanda."""

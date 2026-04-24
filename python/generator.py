@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 # Serializzazione output e utilita numeriche/temporali per campionamento.
+from collections import Counter
 import json
 import math
 import random
@@ -21,6 +22,8 @@ DEFAULT_FORMULA_SAMPLE_LIMIT = 24
 DEFAULT_FORMULA_FETCH_MULTIPLIER = 8
 FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
 FORMULA_FETCH_CACHE_MAX = 64
+MAX_FORMULA_ATOM_REPETITIONS = 3
+FORMULA_REPETITION_PROBABILITY = 0.5
 MAX_MODIFIED_EQUIV_CHECKS = 8
 DISTRACTION_CANDIDATE_MULTIPLIER = 4
 MAX_AUTOMATIC_TRANSFORM_CYCLES = 8
@@ -280,6 +283,61 @@ def _pick_by_head(
     return rng.choice(buckets[selected_head])
 
 
+def _pick_formula_with_repetition_policy(
+    formulas: Sequence[str],
+    rng: random.Random,
+    *,
+    variables: Sequence[str],
+    prefer_or: bool = False,
+    repetition_probability: float = FORMULA_REPETITION_PROBABILITY,
+    max_repetitions: int = MAX_FORMULA_ATOM_REPETITIONS,
+) -> str:
+    """Seleziona una formula bilanciando il ramo con e senza ripetizioni."""
+    filtered_formulas = [
+        formula
+        for formula in formulas
+        if _formula_atom_repetition_count(formula) <= max_repetitions
+    ]
+    if not filtered_formulas:
+        raise RuntimeError("Nessuna formula valida disponibile")
+
+    matching_variables = [formula for formula in filtered_formulas if _uses_vars(formula, variables)]
+    candidate_pool = matching_variables or filtered_formulas
+
+    repeated_formulas = [
+        formula
+        for formula in candidate_pool
+        if _formula_atom_repetition_count(formula) > 0
+    ]
+    unique_formulas = [
+        formula
+        for formula in candidate_pool
+        if _formula_atom_repetition_count(formula) == 0
+    ]
+
+    wants_repetitions = rng.random() < repetition_probability
+
+    if wants_repetitions:
+        if repeated_formulas:
+            return _pick_by_head(repeated_formulas, rng, prefer_or=prefer_or)
+
+        if unique_formulas:
+            base_formula = _pick_by_head(unique_formulas, rng, prefer_or=prefer_or)
+            repeated_formula = _introduce_atom_repetitions(
+                base_formula,
+                rng,
+                variables=variables,
+                max_repetitions=max_repetitions,
+            )
+            if repeated_formula is not None:
+                return repeated_formula
+
+    if unique_formulas:
+        return _pick_by_head(unique_formulas, rng, prefer_or=prefer_or)
+
+    return _pick_by_head(repeated_formulas, rng, prefer_or=prefer_or)
+
+
 def _diversify_sample(formulas: Sequence[str], limit: int, rng: random.Random) -> list[str]:
     """Costruisce un campione diversificato bilanciato tra operatori principali."""
     unique_formulas = list(dict.fromkeys(formulas))
@@ -472,6 +530,127 @@ def formula_atom_count(expr) -> int:
     if hasattr(expr, "left") and hasattr(expr, "right"):
         return formula_atom_count(expr.left) + formula_atom_count(expr.right)
     raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
+
+
+def _formula_atom_repetition_count(expr) -> int:
+    """Conta quante occorrenze ripetute di atomi sono presenti nella formula."""
+    atom_counts: Counter[str] = Counter()
+
+    def walk(node) -> None:
+        if isinstance(node, Var):
+            atom_counts[node.name] += 1
+            return
+        if isinstance(node, Not):
+            walk(node.expr)
+            return
+        if isinstance(node, (And, Or, Imp, Iff)):
+            walk(node.left)
+            walk(node.right)
+            return
+        raise TypeError(f"Tipo formula non supportato: {type(node)!r}")
+
+    walk(_as_ast(expr))
+    return sum(count - 1 for count in atom_counts.values() if count > 1)
+
+
+def _collect_variable_leaf_paths(expr) -> list[tuple[tuple[str, ...], str]]:
+    """Raccoglie i percorsi delle foglie variabile in una formula AST."""
+    ast = _as_ast(expr)
+    leaf_paths: list[tuple[tuple[str, ...], str]] = []
+
+    def walk(node, path: tuple[str, ...]) -> None:
+        if isinstance(node, Var):
+            leaf_paths.append((path, node.name))
+            return
+        if isinstance(node, Not):
+            walk(node.expr, path + ("expr",))
+            return
+        if isinstance(node, (And, Or, Imp, Iff)):
+            walk(node.left, path + ("left",))
+            walk(node.right, path + ("right",))
+            return
+        raise TypeError(f"Tipo formula non supportato: {type(node)!r}")
+
+    walk(ast, ())
+    return leaf_paths
+
+
+def _rewrite_variable_leaves(expr, replacements: dict[tuple[str, ...], str]):
+    """Sostituisce foglie variabile selezionate mantenendo invariata la struttura."""
+    ast = _as_ast(expr)
+
+    def walk(node, path: tuple[str, ...]):
+        if isinstance(node, Var):
+            target_name = replacements.get(path)
+            return Var(target_name) if target_name is not None else node
+        if isinstance(node, Not):
+            return Not(walk(node.expr, path + ("expr",)))
+        if isinstance(node, And):
+            return And(walk(node.left, path + ("left",)), walk(node.right, path + ("right",)))
+        if isinstance(node, Or):
+            return Or(walk(node.left, path + ("left",)), walk(node.right, path + ("right",)))
+        if isinstance(node, Imp):
+            return Imp(walk(node.left, path + ("left",)), walk(node.right, path + ("right",)))
+        if isinstance(node, Iff):
+            return Iff(walk(node.left, path + ("left",)), walk(node.right, path + ("right",)))
+        raise TypeError(f"Tipo formula non supportato: {type(node)!r}")
+
+    return walk(ast, ())
+
+
+def _introduce_atom_repetitions(
+    formula: Any,
+    rng: random.Random,
+    variables: Sequence[str] | None = None,
+    max_repetitions: int = MAX_FORMULA_ATOM_REPETITIONS,
+):
+    """Prova a introdurre ripetizioni controllate di atomi in una formula."""
+    ast = _as_ast(formula)
+    current_repetitions = _formula_atom_repetition_count(ast)
+    if current_repetitions > max_repetitions:
+        return None
+    if current_repetitions > 0:
+        return to_prolog(ast)
+
+    leaf_paths = _collect_variable_leaf_paths(ast)
+    if len(leaf_paths) < 2:
+        return None
+
+    unique_atom_names = list(dict.fromkeys(atom_name for _, atom_name in leaf_paths))
+    if len(unique_atom_names) < 2:
+        return None
+
+    atom_counts = Counter(atom_name for _, atom_name in leaf_paths)
+    rng.shuffle(unique_atom_names)
+    budget = max_repetitions - current_repetitions
+
+    for target_name in unique_atom_names:
+        # Sostituiamo solo foglie di atomi che rimangono comunque presenti,
+        # cosi non perdiamo variabili richieste.
+        available_paths = [
+            path
+            for path, atom_name in leaf_paths
+            if atom_name != target_name and atom_counts[atom_name] > 1
+        ]
+        if not available_paths:
+            continue
+
+        rng.shuffle(available_paths)
+        selected_paths = available_paths[:budget]
+        if not selected_paths:
+            continue
+
+        transformed = _rewrite_variable_leaves(
+            ast,
+            {path: target_name for path in selected_paths},
+        )
+        transformed_prolog = to_prolog(transformed)
+        if variables is not None and not _uses_vars(transformed_prolog, variables):
+            continue
+        if _formula_atom_repetition_count(transformed) <= max_repetitions:
+            return transformed_prolog
+
+    return None
 
 
 def formula_metadata(expr) -> dict:
@@ -762,7 +941,12 @@ def generate_formula(
     if not formulas:
         raise RuntimeError("Nessuna formula generata che usi tutte le variabili richieste")
 
-    selected = _pick_by_head(formulas, rng, prefer_or=(len(variables) >= 5))
+    selected = _pick_formula_with_repetition_policy(
+        formulas,
+        rng,
+        variables=variables,
+        prefer_or=(len(variables) >= 5),
+    )
     if not selected:
         raise RuntimeError("Formula generata non valida")
     return selected
