@@ -157,9 +157,21 @@ Per l'elenco completo degli endpoint e dei payload di esempio, vedi [doc.md](doc
 ## Esempio rapido
 
 ```bash
+curl -X POST http://127.0.0.1:5000/api/generator/build-exercise \
+  -H 'Content-Type: application/json' \
+  -d '{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"seed":42,"timeout":10}'
+
 curl -X POST http://127.0.0.1:5000/api/generator/build-exercise-from-depth \
   -H 'Content-Type: application/json' \
-  -d '{"variables":["p","q"],"seed":42}'
+  -d '{"use_all":false,"seed":42,"wrong_answers_count":3,"timeout":10}'
+
+curl -X POST http://127.0.0.1:5000/api/generator/build-truth-value-options-question \
+  -H 'Content-Type: application/json' \
+  -d '{"predicate_count":4,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}'
+
+curl -X POST http://127.0.0.1:5000/api/generator/build-logical-consequence-question \
+  -H 'Content-Type: application/json' \
+  -d '{"variable_count":4,"correct_options_count":2,"wrong_options_count":2,"seed":42,"timeout":10}'
 ```
 
-Risposta attesa: un oggetto JSON con formula originale, formula modificata e distractor errati.
+Risposta attesa: oggetti JSON con strutture standardizzate, ciascuno con il proprio payload `result` in base all'endpoint chiamato.

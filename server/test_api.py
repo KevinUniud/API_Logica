@@ -51,6 +51,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["result"]["original_formula"]["label"], "formula originale")
         self.assertEqual(payload["result"]["modified_formula"]["label"], "formula modificata")
         self.assertEqual(len(payload["result"]["wrong_answers_prolog"]), 3)
+        self.assertTrue(all(not key.startswith("distraction_") for key in payload["result"].keys()))
 
     def test_truth_options_endpoint(self):
         """Verifica l'endpoint che produce opzioni vero/falso."""
@@ -75,6 +76,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "generator_build_tvq")
         self.assertEqual(payload["result"]["information"], ["p-true", "q-false"])
         self.assertEqual(len(payload["result"]["options"]), 2)
+        self.assertNotIn("true_options", payload["result"])
+        self.assertNotIn("false_options", payload["result"])
 
     def test_formula_by_variable_count_endpoint(self):
         """Verifica l'endpoint che genera formula con numero variabili specifico."""
@@ -94,8 +97,6 @@ class ApiTests(unittest.TestCase):
         """Verifica l'endpoint per il quiz di conseguenza logica."""
         fake_result = {
             "question_prolog": "and(p,or(q,r))",
-            "correct_options": [{"formula_prolog": "imp(p,or(q,r))", "is_consequence": True}],
-            "wrong_options": [{"formula_prolog": "iff(p,q)", "is_consequence": False}],
             "options": [
                 {"formula_prolog": "imp(p,or(q,r))", "is_consequence": True},
                 {"formula_prolog": "iff(p,q)", "is_consequence": False},
@@ -117,6 +118,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "generator_build_logical_consequence_question")
         self.assertEqual(payload["result"]["question_prolog"], "and(p,or(q,r))")
         self.assertEqual(len(payload["result"]["options"]), 2)
+        self.assertNotIn("correct_options", payload["result"])
+        self.assertNotIn("wrong_options", payload["result"])
 
     def test_template_endpoint(self):
         """Verifica l'endpoint template con bridge mockato."""

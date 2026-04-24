@@ -74,12 +74,12 @@ I file `.pl` del progetto vengono caricati dal processo Prolog, ma non viene cre
 | Generator | POST | `/api/generator/formula-payload` | `{"expr":"and(p,q)","extra":{"source":"manual"},"timeout":10}` |
 | Generator | POST | `/api/generator/generate-formula` | `{"variables":["p","q"],"use_all":false,"seed":42,"timeout":10}` |
 | Generator | POST | `/api/generator/generate-formula-json` | `{"variables":["p","q"],"use_all":false,"seed":42,"timeout":10}` |
-| Generator | POST | `/api/generator/build-exercise` | `{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"max_steps":2,"seed":42,"timeout":10}` |
-| Generator | POST | `/api/generator/build-exercise-from-depth` | `{"variables":["p","q"],"use_all":false,"seed":42,"wrong_answers_count":3,"max_steps":2,"timeout":10}` |
-| Generator | POST | `/api/generator/build-truth-value-options-question` | `{"predicate_count":2,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}` |
-| Generator | POST | `/api/generator/build-exercise-json-string` | `{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"max_steps":2,"seed":42,"timeout":10}` |
-| Generator | POST | `/api/generator/build-exercise-from-depth-json-string` | `{"variables":["p","q"],"use_all":false,"seed":42,"wrong_answers_count":3,"max_steps":2,"timeout":10}` |
-| Generator | POST | `/api/generator/build-truth-value-options-question-json-string` | `{"predicate_count":2,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}` |
+| Generator | POST | `/api/generator/build-exercise` | `{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"seed":42,"timeout":10}` |
+| Generator | POST | `/api/generator/build-exercise-from-depth` | `{"use_all":false,"seed":42,"wrong_answers_count":3,"timeout":10}` |
+| Generator | POST | `/api/generator/build-truth-value-options-question` | `{"predicate_count":4,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}` |
+| Generator | POST | `/api/generator/build-exercise-json-string` | `{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"seed":42,"timeout":10}` |
+| Generator | POST | `/api/generator/build-exercise-from-depth-json-string` | `{"use_all":false,"seed":42,"wrong_answers_count":3,"timeout":10}` |
+| Generator | POST | `/api/generator/build-truth-value-options-question-json-string` | `{"predicate_count":4,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}` |
 
 ## Lista curl
 
@@ -302,25 +302,25 @@ curl -X POST http://127.0.0.1:5000/api/generator/generate-formula-json \
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-exercise \
   -H 'Content-Type: application/json' \
-  -d '{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"max_steps":2,"seed":42,"timeout":10}'
+  -d '{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"seed":42,"timeout":10}'
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-exercise-from-depth \
   -H 'Content-Type: application/json' \
-  -d '{"variables":["p","q"],"use_all":false,"seed":42,"wrong_answers_count":3,"max_steps":2,"timeout":10}'
+  -d '{"use_all":false,"seed":42,"wrong_answers_count":3,"timeout":10}'
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-truth-value-options-question \
   -H 'Content-Type: application/json' \
-  -d '{"predicate_count":2,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}'
+  -d '{"predicate_count":4,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}'
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-exercise-json-string \
   -H 'Content-Type: application/json' \
-  -d '{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"max_steps":2,"seed":42,"timeout":10}'
+  -d '{"expr":"or(p,imp(q,p))","wrong_answers_count":3,"seed":42,"timeout":10}'
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-exercise-from-depth-json-string \
   -H 'Content-Type: application/json' \
-  -d '{"variables":["p","q"],"use_all":false,"seed":42,"wrong_answers_count":3,"max_steps":2,"timeout":10}'
+  -d '{"use_all":false,"seed":42,"wrong_answers_count":3,"timeout":10}'
 
 curl -X POST http://127.0.0.1:5000/api/generator/build-truth-value-options-question-json-string \
   -H 'Content-Type: application/json' \
-  -d '{"predicate_count":2,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}'
+  -d '{"predicate_count":4,"true_options_count":2,"false_options_count":2,"seed":42,"timeout":10}'
 ```

@@ -513,15 +513,15 @@ Ds = [...].
 
 ## python/generator.py
 
-### build_exercise(expr, wrong_answers_count=3, max_steps=2, bridge=None, seed=None, timeout=10)
+### build_exercise(expr, wrong_answers_count=3, operator_cycles=None, wrong_from_correct=False, bridge=None, seed=None, timeout=10)
 Costruisce un esercizio a partire da una formula data, con una formula corretta riscritta equivalente e un insieme di distractor errati.
 
 Note:
 - la formula corretta riscritta e garantita diversa dalla formula iniziale
 - i distractor vengono filtrati per mantenere solo formule non equivalenti e con le variabili richieste
 
-### build_ex_depth(depth=None, variables=DEFAULT_VARIABLES, use_all=False, timeout=10, seed=None, wrong_answers_count=3, max_steps=2, bridge=None)
-Genera prima una formula che usa le variabili richieste, poi costruisce un esercizio completo come sopra.
+### build_ex_depth(depth=None, use_all=False, timeout=10, seed=None, wrong_answers_count=3, operator_cycles=None, wrong_from_correct=False, bridge=None)
+Genera prima una formula con set variabili automatico, poi costruisce un esercizio completo come sopra.
 
 ### build_tvq(predicate_count, true_options_count, false_options_count, timeout=10, seed=None, bridge=None)
 Costruisce una domanda del tipo:
@@ -542,8 +542,6 @@ Vincoli del risultato:
 Campi principali restituiti:
 - `information`: valutazione scelta, serializzata come array JSON di stringhe, ad esempio `["p-true", "q-false"]`
 - `options`: lista mista di opzioni con flag `is_true`
-- `true_options`: sole opzioni vere
-- `false_options`: sole opzioni false
 
 ### build_tvq_json(...)
 Serializza come stringa JSON il risultato di `build_tvq`.

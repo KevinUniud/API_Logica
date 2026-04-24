@@ -45,6 +45,23 @@ def _ensure_keys(payload: dict[str, Any], required: Sequence[str]) -> None:
         raise RuntimeError(f"Output incompleto: chiavi mancanti {missing}")
 
 
+def _make_timeout_provider(timeout: int) -> Callable[[int | None], int]:
+    """Costruisce una funzione timeout residuo basata su deadline relativa."""
+    total_timeout = max(1, int(timeout))
+    deadline = time.monotonic() + total_timeout
+
+    def remaining_timeout(cap: int | None = None) -> int:
+        left = max(1, int(math.ceil(deadline - time.monotonic())))
+        return min(left, cap) if cap is not None else left
+
+    return remaining_timeout
+
+
+def _to_json_string(payload: dict[str, Any]) -> str:
+    """Serializza un payload come JSON leggibile con configurazione uniforme."""
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def _default_vars(predicate_count: int) -> list[str]:
     """Restituisce una lista di variabili di default per la cardinalita richiesta."""
     if predicate_count <= 0:
@@ -1065,6 +1082,114 @@ def _pick_wrongs(
     )
 
 
+def _collect_candidate_formulas(
+    *,
+    bridge: PrologBridge,
+    variables: Sequence[str],
+    required_options: int,
+    rng: random.Random,
+    timeout_provider: Callable[[int | None], int],
+    operator_cycles: int | None,
+    target_atom_count: int | None = None,
+    excluded_formulas: Sequence[str] | None = None,
+    dedupe_by_commutative_signature: bool = False,
+    require_non_empty_vars: bool = False,
+) -> list[str]:
+    """Raccoglie un pool di formule candidate con vincoli condivisi tra builder quiz."""
+    candidates: list[str] = []
+    seen_candidates: set[str] = set(excluded_formulas or ())
+    seen_signatures: set[str] = set()
+    if dedupe_by_commutative_signature:
+        seen_signatures = {_commutative_signature(formula) for formula in seen_candidates}
+
+    allowed_variables = set(variables)
+
+    def register_candidate(formula: str) -> None:
+        if not formula or formula in seen_candidates:
+            return
+        used_variables = collect_variables(_as_ast(formula))
+        if require_non_empty_vars and not used_variables:
+            return
+        if not used_variables.issubset(allowed_variables):
+            return
+        if target_atom_count is not None and not _has_atom_count(formula, target_atom_count):
+            return
+
+        if dedupe_by_commutative_signature:
+            signature = _commutative_signature(formula)
+            if signature in seen_signatures:
+                return
+            seen_signatures.add(signature)
+
+        seen_candidates.add(formula)
+        candidates.append(formula)
+
+    def register_with_operator_cycles(formula: str) -> None:
+        transformed = _transform_answer_candidates(
+            formula=formula,
+            bridge=bridge,
+            rng=rng,
+            operator_cycles=operator_cycles,
+            timeout_provider=lambda: timeout_provider(2),
+        )
+        for candidate in transformed:
+            register_candidate(candidate)
+
+    for variable in variables:
+        register_candidate(variable)
+        register_with_operator_cycles(f"not({variable})")
+
+    search_depth = max(2, _depth_from_var_count(len(variables)) + 2)
+    target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
+
+    for depth in range(1, search_depth + 1):
+        fetched = _get_formulas(
+            bridge=bridge,
+            depth=depth,
+            variables=variables,
+            use_all=False,
+            timeout=timeout_provider(3),
+            rng=rng,
+        )
+        for formula in fetched:
+            register_candidate(formula)
+        if len(candidates) >= target_candidate_count:
+            break
+
+    return candidates
+
+
+def _sample_partitioned_options(
+    *,
+    rng: random.Random,
+    left_candidates: Sequence[str],
+    right_candidates: Sequence[str],
+    left_count: int,
+    right_count: int,
+    max_attempts: int = 12,
+    uniqueness_key: Callable[[str], str] | None = None,
+    extra_validator: Callable[[Sequence[str], Sequence[str]], bool] | None = None,
+) -> tuple[list[str], list[str]] | None:
+    """Campiona due partizioni di opzioni rispettando i vincoli comuni di diversita."""
+    for _ in range(max_attempts):
+        trial_left = rng.sample(list(left_candidates), left_count)
+        trial_right = rng.sample(list(right_candidates), right_count)
+        trial_options = trial_left + trial_right
+
+        if len(set(trial_options)) != len(trial_options):
+            continue
+        if uniqueness_key is not None:
+            if len({uniqueness_key(option) for option in trial_options}) != len(trial_options):
+                continue
+        if not _has_operator_diversity(trial_options):
+            continue
+        if extra_validator is not None and not extra_validator(trial_left, trial_right):
+            continue
+        return trial_left, trial_right
+
+    return None
+
+
 def build_tvq(
     predicate_count: int,
     true_options_count: int,
@@ -1086,8 +1211,7 @@ def build_tvq(
 
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
-    total_timeout = max(1, int(timeout))
-    deadline = time.monotonic() + total_timeout
+    remaining_timeout = _make_timeout_provider(timeout)
 
     # Se predicate_count è 4 o 5, usa un set casuale; altrimenti genera dinamicamente
     if predicate_count in (4, 5):
@@ -1098,64 +1222,22 @@ def build_tvq(
     effective_predicate_count = len(variables)
     required_options = true_options_count + false_options_count
 
-    def remaining_timeout(cap: int | None = None) -> int:
-        left = max(1, int(math.ceil(deadline - time.monotonic())))
-        return min(left, cap) if cap is not None else left
-
-    valuations = bridge.assignment(variables, timeout=remaining_timeout(total_timeout))
+    valuations = bridge.assignment(variables, timeout=remaining_timeout(None))
     if not valuations:
         raise RuntimeError("Nessuna assegnazione disponibile per i predicati richiesti")
     rng.shuffle(valuations)
 
-    candidates: list[str] = []
-    seen_candidates: set[str] = set()
-    allowed_variables = set(variables)
     target_atom_count = effective_predicate_count
-
-    def register_candidate(formula: str) -> None:
-        if not formula or formula in seen_candidates:
-            return
-        used_variables = collect_variables(_as_ast(formula))
-        if not used_variables:
-            return
-        if not used_variables.issubset(allowed_variables):
-            return
-        if not _has_atom_count(formula, target_atom_count):
-            return
-        seen_candidates.add(formula)
-        candidates.append(formula)
-
-    def register_with_operator_cycles(formula: str) -> None:
-        transformed = _transform_answer_candidates(
-            formula=formula,
-            bridge=bridge,
-            rng=rng,
-            operator_cycles=operator_cycles,
-            timeout_provider=lambda: remaining_timeout(2),
-        )
-        for candidate in transformed:
-            register_candidate(candidate)
-
-    for variable in variables:
-        register_candidate(variable)
-        register_with_operator_cycles(f"not({variable})")
-
-    search_depth = max(2, _depth_from_var_count(effective_predicate_count) + 2)
-    target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
-
-    for depth in range(1, search_depth + 1):
-        fetched = _get_formulas(
-            bridge=bridge,
-            depth=depth,
-            variables=variables,
-            use_all=False,
-            timeout=remaining_timeout(3),
-            rng=rng,
-        )
-        for formula in fetched:
-            register_candidate(formula)
-        if len(candidates) >= target_candidate_count:
-            break
+    candidates = _collect_candidate_formulas(
+        bridge=bridge,
+        variables=variables,
+        required_options=required_options,
+        rng=rng,
+        timeout_provider=remaining_timeout,
+        operator_cycles=operator_cycles,
+        target_atom_count=target_atom_count,
+        require_non_empty_vars=True,
+    )
 
     if len(candidates) < required_options:
         raise RuntimeError(
@@ -1186,39 +1268,26 @@ def build_tvq(
         if not _has_operator_diversity(combined_candidates):
             continue
 
-        selected_true: list[str] | None = None
-        selected_false: list[str] | None = None
+        selected = _sample_partitioned_options(
+            rng=rng,
+            left_candidates=true_candidates,
+            right_candidates=false_candidates,
+            left_count=true_options_count,
+            right_count=false_options_count,
+        )
 
-        # Prova piu campionamenti per rispettare sia la distinzione pairwise
-        # sia il vincolo di differenza tra operatori principali.
-        sample_attempts = 12
-        for _ in range(sample_attempts):
-            trial_true = rng.sample(true_candidates, true_options_count)
-            trial_false = rng.sample(false_candidates, false_options_count)
-            trial_options = trial_true + trial_false
-            if len(set(trial_options)) != len(trial_options):
-                continue
-            if not _has_operator_diversity(trial_options):
-                continue
-            selected_true = trial_true
-            selected_false = trial_false
-            break
-
-        if selected_true is None or selected_false is None:
+        if selected is None:
             continue
+
+        selected_true, selected_false = selected
 
         _require_pairwise_distinct(selected_true + selected_false, "build_tvq options")
 
-        true_entries = [
-            _formula_entry(formula, label=f"opzione vera n{index}", is_true=True)
-            for index, formula in enumerate(selected_true, start=1)
+        options = [
+            _formula_entry(formula, is_true=True) for formula in selected_true
+        ] + [
+            _formula_entry(formula, is_true=False) for formula in selected_false
         ]
-        false_entries = [
-            _formula_entry(formula, label=f"opzione falsa n{index}", is_true=False)
-            for index, formula in enumerate(selected_false, start=1)
-        ]
-
-        options = true_entries + false_entries
         rng.shuffle(options)
 
         result = {
@@ -1229,12 +1298,10 @@ def build_tvq(
             "variables": variables,
             "information": list(valuation),
             "options": options,
-            "true_options": true_entries,
-            "false_options": false_entries,
             "source": "prolog_assignment_and_eval",
         }
 
-        _ensure_keys(result, ["information", "options", "true_options", "false_options", "variables"])
+        _ensure_keys(result, ["information", "options", "variables"])
         return result
 
     raise RuntimeError(
@@ -1267,72 +1334,28 @@ def build_logical_consequence_question(
 
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
-    total_timeout = max(1, int(timeout))
-    deadline = time.monotonic() + total_timeout
+    remaining_timeout = _make_timeout_provider(timeout)
     required_options = correct_options_count + wrong_options_count
     variables = _default_vars(variable_count)
     question_formula = generate_formula_by_variable_count(
         variable_count=variable_count,
         use_all=False,
-        timeout=total_timeout,
+        timeout=max(1, int(timeout)),
         seed=seed,
         bridge=bridge,
     )
     question_prolog = _as_prolog(question_formula)
 
-    def remaining_timeout(cap: int | None = None) -> int:
-        left = max(1, int(math.ceil(deadline - time.monotonic())))
-        return min(left, cap) if cap is not None else left
-
-    candidates: list[str] = []
-    seen_candidates: set[str] = {question_prolog}
-    seen_signatures: set[str] = {_commutative_signature(question_prolog)}
-    allowed_variables = set(variables)
-
-    def register_candidate(formula: str) -> None:
-        if not formula or formula in seen_candidates:
-            return
-        used_variables = collect_variables(_as_ast(formula))
-        if not used_variables.issubset(allowed_variables):
-            return
-        signature = _commutative_signature(formula)
-        if signature in seen_signatures:
-            return
-        seen_candidates.add(formula)
-        seen_signatures.add(signature)
-        candidates.append(formula)
-
-    def register_with_operator_cycles(formula: str) -> None:
-        transformed = _transform_answer_candidates(
-            formula=formula,
-            bridge=bridge,
-            rng=rng,
-            operator_cycles=operator_cycles,
-            timeout_provider=lambda: remaining_timeout(2),
-        )
-        for candidate in transformed:
-            register_candidate(candidate)
-
-    for variable in variables:
-        register_candidate(variable)
-        register_with_operator_cycles(f"not({variable})")
-
-    search_depth = max(2, _depth_from_var_count(variable_count) + 2)
-    target_candidate_count = max(required_options * DISTRACTION_CANDIDATE_MULTIPLIER, 12)
-
-    for depth in range(1, search_depth + 1):
-        fetched = _get_formulas(
-            bridge=bridge,
-            depth=depth,
-            variables=variables,
-            use_all=False,
-            timeout=remaining_timeout(3),
-            rng=rng,
-        )
-        for formula in fetched:
-            register_candidate(formula)
-        if len(candidates) >= target_candidate_count:
-            break
+    candidates = _collect_candidate_formulas(
+        bridge=bridge,
+        variables=variables,
+        required_options=required_options,
+        rng=rng,
+        timeout_provider=remaining_timeout,
+        operator_cycles=operator_cycles,
+        excluded_formulas=[question_prolog],
+        dedupe_by_commutative_signature=True,
+    )
 
     if len(candidates) < required_options:
         raise RuntimeError("Non ci sono abbastanza formule candidate per il quiz di conseguenza logica")
@@ -1375,47 +1398,36 @@ def build_logical_consequence_question(
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
 
-    selected_correct: list[str] | None = None
-    selected_wrong: list[str] | None = None
-    sample_attempts = 12
-    for _ in range(sample_attempts):
-        trial_correct = rng.sample(consequence_candidates, correct_options_count)
-        trial_wrong = rng.sample(non_consequence_candidates, wrong_options_count)
-        trial_options = trial_correct + trial_wrong
-        if len(set(trial_options)) != len(trial_options):
-            continue
-        if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
-            continue
-        if not _has_operator_diversity(trial_options):
-            continue
+    selected = _sample_partitioned_options(
+        rng=rng,
+        left_candidates=consequence_candidates,
+        right_candidates=non_consequence_candidates,
+        left_count=correct_options_count,
+        right_count=wrong_options_count,
+        uniqueness_key=_commutative_signature,
         # Validazione semantica esplicita per evitare mismatch tra classificazione
         # iniziale e set finale selezionato.
-        if not all(is_logical_consequence(item) for item in trial_correct):
-            continue
-        if any(is_logical_consequence(item) for item in trial_wrong):
-            continue
-        selected_correct = trial_correct
-        selected_wrong = trial_wrong
-        break
+        extra_validator=lambda selected_left, selected_right: (
+            all(is_logical_consequence(item) for item in selected_left)
+            and not any(is_logical_consequence(item) for item in selected_right)
+        ),
+    )
 
-    if selected_correct is None or selected_wrong is None:
+    if selected is None:
         raise RuntimeError("Impossibile rispettare i vincoli di diversita nel quiz di conseguenza logica")
+
+    selected_correct, selected_wrong = selected
 
     if len({_commutative_signature(option) for option in selected_correct + selected_wrong}) != len(
         selected_correct + selected_wrong
     ):
         raise RuntimeError("Postcondizione fallita: formule non distinte nel quiz di conseguenza logica")
 
-    correct_entries = [
-        _formula_entry(formula, label=f"opzione conseguenza n{index}", is_consequence=True)
-        for index, formula in enumerate(selected_correct, start=1)
+    options = [
+        _formula_entry(formula, is_consequence=True) for formula in selected_correct
+    ] + [
+        _formula_entry(formula, is_consequence=False) for formula in selected_wrong
     ]
-    wrong_entries = [
-        _formula_entry(formula, label=f"opzione non-conseguenza n{index}", is_consequence=False)
-        for index, formula in enumerate(selected_wrong, start=1)
-    ]
-
-    options = correct_entries + wrong_entries
     rng.shuffle(options)
 
     result = {
@@ -1426,14 +1438,12 @@ def build_logical_consequence_question(
         "variables": variables,
         "question_prolog": question_prolog,
         "options": options,
-        "correct_options": correct_entries,
-        "wrong_options": wrong_entries,
         "source": "prolog_implies_formula",
     }
 
     _ensure_keys(
         result,
-        ["question_prolog", "options", "correct_options", "wrong_options", "variables"],
+        ["question_prolog", "options", "variables"],
     )
     return result
 
@@ -1458,15 +1468,11 @@ def build_exercise(
     question_expr = from_prolog(question_prolog)
     variables = sorted(collect_variables(question_expr))
     question_atom_count = formula_atom_count(question_expr)
+    remaining_timeout = _make_timeout_provider(timeout)
     total_timeout = max(1, int(timeout))
-    deadline = time.monotonic() + total_timeout
     check_timeout = max(1, min(total_timeout, 2))
     equiv_cache: dict[str, bool] = {}
     not_equiv_cache: dict[str, bool] = {}
-
-    def remaining_timeout(cap: int | None = None) -> int:
-        left = max(1, int(math.ceil(deadline - time.monotonic())))
-        return min(left, cap) if cap is not None else left
 
     def filter_equiv_batch(candidates: Sequence[str]) -> list[str]:
         unresolved = [candidate for candidate in candidates if candidate not in equiv_cache]
@@ -1561,11 +1567,6 @@ def build_exercise(
         label="formula modificata",
         steps=rewrite_steps,
     )
-    distractions = [
-        _formula_entry(candidate, label=f"formula distrazione n{index}")
-        for index, candidate in enumerate(wrong_selected, start=1)
-    ]
-
     exercise = {
         "original_formula": original_formula,
         "modified_formula": modified_formula,
@@ -1579,9 +1580,6 @@ def build_exercise(
         "correct_answer_prolog": modified_prolog,
         "wrong_answers_prolog": wrong_selected,
     }
-
-    for index, entry in enumerate(distractions, start=1):
-        exercise[f"distraction_{index}"] = entry
 
     _ensure_keys(exercise, ["original_formula", "modified_formula", "wrong_answers_prolog"])
     if len(exercise["wrong_answers_prolog"]) < wrong_answers_count:
@@ -1606,12 +1604,7 @@ def build_ex_depth(
     _req_int_ge("timeout", int(timeout), 1)
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
-    total_timeout = max(1, int(timeout))
-    deadline = time.monotonic() + total_timeout
-
-    def remaining_timeout(cap: int | None = None) -> int:
-        left = max(1, int(math.ceil(deadline - time.monotonic())))
-        return min(left, cap) if cap is not None else left
+    remaining_timeout = _make_timeout_provider(timeout)
 
     variables = _select_random_var_set(rng=rng, depth=depth)
 
@@ -1621,7 +1614,7 @@ def build_ex_depth(
         depth=depth,
         variables=variables,
         use_all=use_all,
-        timeout=remaining_timeout(total_timeout),
+        timeout=remaining_timeout(None),
         rng=rng,
     )
 
@@ -1648,7 +1641,7 @@ def build_ex_depth(
                 wrong_answers_count=wrong_answers_count,
                 operator_cycles=operator_cycles,
                 wrong_from_correct=wrong_from_correct,
-                timeout=remaining_timeout(total_timeout),
+                timeout=remaining_timeout(None),
             )
         except RuntimeError as exc:
             last_error = exc
@@ -1673,7 +1666,7 @@ def build_ex_json(
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
-    return json.dumps(
+    return _to_json_string(
         build_exercise(
             expr=expr,
             bridge=bridge,
@@ -1682,9 +1675,7 @@ def build_ex_json(
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             timeout=timeout,
-        ),
-        ensure_ascii=False,
-        indent=2,
+        )
     )
 
 
@@ -1703,7 +1694,7 @@ def build_ex_depth_json(
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
-    return json.dumps(
+    return _to_json_string(
         build_ex_depth(
             depth=depth,
             use_all=use_all,
@@ -1713,9 +1704,7 @@ def build_ex_depth_json(
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             bridge=bridge,
-        ),
-        ensure_ascii=False,
-        indent=2,
+        )
     )
 
 
@@ -1735,7 +1724,7 @@ def build_tvq_json(
     _req_int_ge("false_options_count", false_options_count, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
-    return json.dumps(
+    return _to_json_string(
         build_tvq(
             predicate_count=predicate_count,
             true_options_count=true_options_count,
@@ -1744,9 +1733,7 @@ def build_tvq_json(
             seed=seed,
             operator_cycles=operator_cycles,
             bridge=bridge,
-        ),
-        ensure_ascii=False,
-        indent=2,
+        )
     )
 
 
@@ -1766,7 +1753,7 @@ def build_logical_consequence_question_json(
     _req_int_ge("timeout", int(timeout), 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
-    return json.dumps(
+    return _to_json_string(
         build_logical_consequence_question(
             variable_count=variable_count,
             correct_options_count=correct_options_count,
@@ -1775,7 +1762,5 @@ def build_logical_consequence_question_json(
             seed=seed,
             operator_cycles=operator_cycles,
             bridge=bridge,
-        ),
-        ensure_ascii=False,
-        indent=2,
+        )
     )

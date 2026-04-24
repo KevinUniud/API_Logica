@@ -66,8 +66,8 @@ def _only_formulas_ex_depth(payload: dict) -> dict:
 def _only_formulas_tvq(payload: dict) -> dict:
     """Riduce l'output TVQ alle sole formule Prolog delle opzioni."""
     return {
-        "true_options_prolog": [entry["formula_prolog"] for entry in payload["true_options"]],
-        "false_options_prolog": [entry["formula_prolog"] for entry in payload["false_options"]],
+        "true_options_prolog": [entry["formula_prolog"] for entry in payload["options"] if entry.get("is_true")],
+        "false_options_prolog": [entry["formula_prolog"] for entry in payload["options"] if not entry.get("is_true")],
         "options_prolog": [entry["formula_prolog"] for entry in payload["options"]],
     }
 
@@ -76,8 +76,8 @@ def _only_formulas_logical_consequence(payload: dict) -> dict:
     """Riduce l'output conseguenza logica alle sole formule Prolog."""
     return {
         "question_prolog": payload["question_prolog"],
-        "correct_options_prolog": [entry["formula_prolog"] for entry in payload["correct_options"]],
-        "wrong_options_prolog": [entry["formula_prolog"] for entry in payload["wrong_options"]],
+        "correct_options_prolog": [entry["formula_prolog"] for entry in payload["options"] if entry.get("is_consequence")],
+        "wrong_options_prolog": [entry["formula_prolog"] for entry in payload["options"] if not entry.get("is_consequence")],
         "options_prolog": [entry["formula_prolog"] for entry in payload["options"]],
     }
 
