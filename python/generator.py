@@ -293,50 +293,104 @@ def _pick_formula_with_repetition_policy(
     repetition_probability: float = FORMULA_REPETITION_PROBABILITY,
     max_repetitions: int = MAX_FORMULA_ATOM_REPETITIONS,
 ) -> str:
-    """Seleziona una formula bilanciando il ramo con e senza ripetizioni."""
+    """Seleziona una formula applicando la policy di ripetizione su singolo trial."""
+    selected = _select_formulas_with_repetition_policy(
+        formulas,
+        count=1,
+        rng=rng,
+        variables=variables,
+        prefer_or=prefer_or,
+        repetition_probability=repetition_probability,
+        max_repetitions=max_repetitions,
+    )
+    return selected[0]
+
+
+def _select_formulas_with_repetition_policy(
+    formulas: Sequence[str],
+    count: int,
+    rng: random.Random,
+    *,
+    variables: Sequence[str] | None = None,
+    prefer_or: bool = False,
+    repetition_probability: float = FORMULA_REPETITION_PROBABILITY,
+    max_repetitions: int = MAX_FORMULA_ATOM_REPETITIONS,
+) -> list[str]:
+    """Seleziona N formule con trial indipendenti sulla presenza di ripetizioni."""
+    _req_int_ge("count", count, 1)
+
     filtered_formulas = [
         formula
-        for formula in formulas
+        for formula in dict.fromkeys(formulas)
         if _formula_atom_repetition_count(formula) <= max_repetitions
     ]
-    if not filtered_formulas:
-        raise RuntimeError("Nessuna formula valida disponibile")
+    if variables is not None:
+        matching_variables = [formula for formula in filtered_formulas if _uses_vars(formula, variables)]
+        if matching_variables:
+            filtered_formulas = matching_variables
 
-    matching_variables = [formula for formula in filtered_formulas if _uses_vars(formula, variables)]
-    candidate_pool = matching_variables or filtered_formulas
+    if len(filtered_formulas) < count:
+        raise RuntimeError(
+            f"Nessuna formula valida disponibile: richieste {count}, disponibili {len(filtered_formulas)}"
+        )
 
     repeated_formulas = [
         formula
-        for formula in candidate_pool
+        for formula in filtered_formulas
         if _formula_has_non_banal_repetitions(formula)
     ]
     unique_formulas = [
         formula
-        for formula in candidate_pool
+        for formula in filtered_formulas
         if _formula_atom_repetition_count(formula) == 0
     ]
 
-    wants_repetitions = rng.random() < repetition_probability
+    selected: list[str] = []
+    used: set[str] = set()
 
-    if wants_repetitions:
-        if repeated_formulas:
-            return _pick_by_head(repeated_formulas, rng, prefer_or=prefer_or)
+    def choose_from(pool: Sequence[str]) -> str | None:
+        available = [item for item in pool if item not in used]
+        if not available:
+            return None
+        return _pick_by_head(available, rng, prefer_or=prefer_or)
 
-        if unique_formulas:
-            base_formula = _pick_by_head(unique_formulas, rng, prefer_or=prefer_or)
-            repeated_formula = _introduce_atom_repetitions(
-                base_formula,
-                rng,
-                variables=variables,
-                max_repetitions=max_repetitions,
-            )
-            if repeated_formula is not None and _formula_has_non_banal_repetitions(repeated_formula):
-                return repeated_formula
+    for _ in range(count):
+        wants_repetitions = rng.random() < repetition_probability
+        primary_pool = repeated_formulas if wants_repetitions else unique_formulas
+        secondary_pool = unique_formulas if wants_repetitions else repeated_formulas
 
-    if unique_formulas:
-        return _pick_by_head(unique_formulas, rng, prefer_or=prefer_or)
+        chosen = choose_from(primary_pool)
+        if chosen is None:
+            chosen = choose_from(secondary_pool)
 
-    return _pick_by_head(repeated_formulas, rng, prefer_or=prefer_or)
+        if chosen is None and wants_repetitions and variables is not None:
+            base_formula = choose_from(unique_formulas)
+            if base_formula is not None:
+                repeated_formula = _introduce_atom_repetitions(
+                    base_formula,
+                    rng,
+                    variables=variables,
+                    max_repetitions=max_repetitions,
+                )
+                if repeated_formula is not None and repeated_formula not in used:
+                    chosen = repeated_formula
+
+        # Se nessuno dei due rami e disponibile, usa l'intero pool valido.
+        if chosen is None:
+            chosen = choose_from(filtered_formulas)
+
+        if chosen is None:
+            break
+
+        used.add(chosen)
+        selected.append(chosen)
+
+    if len(selected) < count:
+        raise RuntimeError(
+            f"Nessuna formula valida disponibile: richieste {count}, selezionate {len(selected)}"
+        )
+
+    return selected
 
 
 def _diversify_sample(formulas: Sequence[str], limit: int, rng: random.Random) -> list[str]:
@@ -1390,8 +1444,22 @@ def _sample_partitioned_options(
 ) -> tuple[list[str], list[str]] | None:
     """Campiona due partizioni di opzioni rispettando i vincoli comuni di diversita."""
     for _ in range(max_attempts):
-        trial_left = rng.sample(list(left_candidates), left_count)
-        trial_right = rng.sample(list(right_candidates), right_count)
+        try:
+            trial_left = _select_formulas_with_repetition_policy(
+                left_candidates,
+                count=left_count,
+                rng=rng,
+            )
+            trial_right = _select_formulas_with_repetition_policy(
+                right_candidates,
+                count=right_count,
+                rng=rng,
+            )
+        except RuntimeError:
+            if len(left_candidates) < left_count or len(right_candidates) < right_count:
+                return None
+            trial_left = rng.sample(list(left_candidates), left_count)
+            trial_right = rng.sample(list(right_candidates), right_count)
         trial_options = trial_left + trial_right
 
         if len(set(trial_options)) != len(trial_options):

@@ -11,6 +11,7 @@ from generator import build_translation_question
 from generator import generate_formula_by_variable_count
 from generator import generate_formula
 from generator import _formula_has_non_banal_repetitions
+from generator import _select_formulas_with_repetition_policy
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
 
@@ -838,6 +839,37 @@ class GeneratorTests(unittest.TestCase):
                 self.assertNotIn(formula, banal_formulas)
 
         self.assertTrue(seen_repeated)
+
+    def test_repetition_policy_is_independent_per_selected_formula(self):
+        """Verifica che la decisione di ripetizione sia indipendente per ogni formula selezionata."""
+        candidates = [
+            "and(p,q)",
+            "or(p,q)",
+            "and(p,or(p,q))",
+            "or(q,and(p,q))",
+            "imp(p,or(p,q))",
+            "iff(q,and(p,q))",
+        ]
+
+        repeated_by_position = [0, 0, 0]
+        total_runs = 200
+
+        for seed in range(total_runs):
+            picked = _select_formulas_with_repetition_policy(
+                candidates,
+                count=3,
+                rng=random.Random(seed),
+            )
+            self.assertEqual(len(picked), 3)
+            self.assertEqual(len(set(picked)), 3)
+            for idx, formula in enumerate(picked):
+                if _count_atom_repetitions(formula) > 0:
+                    repeated_by_position[idx] += 1
+
+        for repeated_count in repeated_by_position:
+            ratio = repeated_count / total_runs
+            self.assertGreater(ratio, 0.2)
+            self.assertLess(ratio, 0.8)
 
     def test_wrong_answers_only_q_vars(self):
         """Verifica che i distractor usino solo le variabili della domanda."""
