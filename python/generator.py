@@ -812,6 +812,24 @@ def _has_atom_count(formula: Any, target_atom_count: int | None) -> bool:
     return formula_atom_count(_as_ast(formula)) == target_atom_count
 
 
+def _has_adjacent_duplicate_atoms(formula: Any) -> bool:
+    """Rileva occorrenze con due atomi uguali come figli diretti dello stesso connettivo binario."""
+    ast = _as_ast(formula)
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, Var):
+            return False
+        if isinstance(node, Not):
+            return walk(node.expr)
+        if isinstance(node, (And, Or, Imp, Iff)):
+            if isinstance(node.left, Var) and isinstance(node.right, Var) and node.left.name == node.right.name:
+                return True
+            return walk(node.left) or walk(node.right)
+        raise TypeError(f"Tipo formula non supportato: {type(node)!r}")
+
+    return walk(ast)
+
+
 def _swap_and_or_rec(node: Any, rng: random.Random, swap_probability: float = 0.5) -> Any:
     """FALLBACK IMPLEMENTATION: Scambia casualmente i figli di and/or mantenendo intatto il resto della formula.
     
@@ -1130,6 +1148,8 @@ def _pick_modified(
         for candidate in source:
             if not candidate or candidate == question_prolog or candidate in seen:
                 continue
+            if _has_adjacent_duplicate_atoms(candidate):
+                continue
             if not _uses_vars(candidate, variables):
                 continue
             if not _has_atom_count(candidate, target_atom_count):
@@ -1156,6 +1176,7 @@ def _pick_modified(
                 for item in extra_raw
                 if item
                 and item != question_prolog
+                and not _has_adjacent_duplicate_atoms(item)
                 and _is_effective_transformation(candidate, item)
                 and _uses_vars(item, variables)
                 and _has_atom_count(item, target_atom_count)
@@ -1175,6 +1196,8 @@ def _pick_modified(
         rng.shuffle(indexed)
         for idx, candidate in indexed:
             selected, selected_steps = finalize_candidate(candidate, base_steps(idx))
+            if _has_adjacent_duplicate_atoms(selected):
+                continue
             if selected_steps < MIN_NON_TRIVIAL_CORRECT_STEPS:
                 continue
             if not _is_effective_transformation(question_prolog, selected):
@@ -1255,6 +1278,7 @@ def _pick_wrongs(
             for candidate in (candidates or [])
             if candidate
             and candidate not in seen
+            and not _has_adjacent_duplicate_atoms(candidate)
             and _uses_vars(candidate, variables)
             and _has_atom_count(candidate, target_atom_count)
         ]
@@ -1276,7 +1300,10 @@ def _pick_wrongs(
         expanded = [
             candidate
             for candidate in dict.fromkeys(expanded)
-            if candidate and _uses_vars(candidate, variables) and _has_atom_count(candidate, target_atom_count)
+            if candidate
+            and not _has_adjacent_duplicate_atoms(candidate)
+            and _uses_vars(candidate, variables)
+            and _has_atom_count(candidate, target_atom_count)
         ]
 
         seen.update(expanded)
@@ -1366,6 +1393,7 @@ def _collect_candidate_formulas(
     excluded_formulas: Sequence[str] | None = None,
     dedupe_by_commutative_signature: bool = False,
     require_non_empty_vars: bool = False,
+    forbid_adjacent_duplicate_atoms: bool = False,
 ) -> list[str]:
     """Raccoglie un pool di formule candidate con vincoli condivisi tra builder quiz."""
     candidates: list[str] = []
@@ -1385,6 +1413,8 @@ def _collect_candidate_formulas(
         if not used_variables.issubset(allowed_variables):
             return
         if target_atom_count is not None and not _has_atom_count(formula, target_atom_count):
+            return
+        if forbid_adjacent_duplicate_atoms and _has_adjacent_duplicate_atoms(formula):
             return
 
         if dedupe_by_commutative_signature:
@@ -1523,6 +1553,7 @@ def build_tvq(
         operator_cycles=operator_cycles,
         target_atom_count=target_atom_count,
         require_non_empty_vars=True,
+        forbid_adjacent_duplicate_atoms=True,
     )
 
     if len(candidates) < required_options:
@@ -1643,6 +1674,7 @@ def build_logical_consequence_question(
         operator_cycles=operator_cycles,
         excluded_formulas=[question_prolog],
         dedupe_by_commutative_signature=True,
+        forbid_adjacent_duplicate_atoms=True,
     )
 
     if len(candidates) < required_options:

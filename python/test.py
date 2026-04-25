@@ -480,6 +480,111 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual([entry["formula_prolog"] for entry in question["correct_options"]], ["p"])
         self.assertNotIn("and(q,p)", [entry["formula_prolog"] for entry in question["options"]])
 
+    def test_logical_consequence_rejects_adjacent_duplicate_atoms(self):
+        """Verifica che opzioni tipo and(q,q) vengano escluse dal quiz di conseguenza logica."""
+
+        class DuplicateAtomOptionBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                if tuple(variables) != ("p", "q"):
+                    return []
+                if depth == 2:
+                    return ["and(p,q)"]
+                formulas = [
+                    "p",
+                    "or(p,q)",
+                    "and(q,q)",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                return right == "p"
+
+        question = build_logical_consequence_question(
+            variable_count=2,
+            correct_options_count=1,
+            wrong_options_count=1,
+            seed=23,
+            bridge=_bridge(DuplicateAtomOptionBridge()),
+        )
+
+        formulas = [entry["formula_prolog"] for entry in question["options"]]
+        self.assertNotIn("and(q,q)", formulas)
+
+    def test_tvq_rejects_adjacent_duplicate_atoms(self):
+        """Verifica che build_tvq escluda opzioni tipo and(q,q)."""
+
+        class TvqDuplicateAtomBridge(FakeBridge):
+            def assignment(self, vars_list, timeout=10):
+                return [["p-true", "q-false"]]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                if tuple(variables) != ("p", "q"):
+                    return []
+                formulas = [
+                    "and(q,q)",
+                    "and(p,q)",
+                    "or(p,q)",
+                ]
+                return formulas[:limit]
+
+            def eval(self, expr, valuation, timeout=10):
+                return expr == "and(p,q)"
+
+        question = build_tvq(
+            predicate_count=2,
+            true_options_count=1,
+            false_options_count=1,
+            seed=31,
+            bridge=_bridge(TvqDuplicateAtomBridge()),
+        )
+
+        formulas = [entry["formula_prolog"] for entry in question["options"]]
+        self.assertNotIn("and(q,q)", formulas)
+
+    def test_exercise_rejects_adjacent_duplicate_atoms_in_wrongs(self):
+        """Verifica che i distractor dell'esercizio escludano formule tipo and(q,q)."""
+
+        class ExerciseDuplicateAtomBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                return ["and(and(p,q),and(r,s))"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                return ["and(and(p,q),and(r,s))"][:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                return [
+                    expr,
+                    "imp(and(p,q),and(r,s))",
+                    "or(and(p,q),and(r,s))",
+                ]
+
+            def rewrite_formula(self, expr, timeout=10):
+                return ["imp(and(p,q),and(r,s))", "or(and(p,q),and(r,s))"]
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                return right in {"imp(and(p,q),and(r,s))", "or(and(p,q),and(r,s))"}
+
+            def all_step_neq(self, expr, timeout=10):
+                return ["and(and(p,p),and(r,s))", "imp(and(p,q),and(r,s))"]
+
+            def one_step_neq(self, expr, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                return right == "imp(and(p,q),and(r,s))"
+
+        exercise = build_ex_depth(
+            depth=2,
+            wrong_answers_count=1,
+            seed=37,
+            bridge=_bridge(ExerciseDuplicateAtomBridge()),
+        )
+
+        self.assertNotIn("and(and(p,p),and(r,s))", exercise["wrong_answers_prolog"])
+
     def test_ex_few_preds_distinct(self):
         """Verifica che la formula modificata resti distinta con pochi predicati."""
         class FewPredicatesBridge(FakeBridge):
