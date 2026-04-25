@@ -2336,6 +2336,7 @@ def build_translation_question(
     quantifier_ratio: float,
     wrong_options_count: int = 3,
     names_pool: Sequence[str],
+    people_count: int | None = None,
     actions_pool: Sequence[str],
     implied_person_predicate: bool,
     allow_spoken_mode: bool,
@@ -2350,6 +2351,8 @@ def build_translation_question(
         raise ValueError("quantifier_ratio deve essere compreso tra 0 e 1")
     if not names_pool:
         raise ValueError("names_pool non può essere vuoto")
+    if people_count is not None:
+        _req_int_ge("people_count", int(people_count), 1)
     if not actions_pool:
         raise ValueError("actions_pool non può essere vuoto")
 
@@ -2357,6 +2360,15 @@ def build_translation_question(
     _ = allow_spoken_mode
 
     rng = random.Random(seed)
+    normalized_names_pool = [name for name in dict.fromkeys(names_pool)]
+    if people_count is not None and people_count > len(normalized_names_pool):
+        raise ValueError("people_count non può superare il numero di nomi distinti in names_pool")
+    selected_names_pool = (
+        list(normalized_names_pool)
+        if people_count is None
+        else rng.sample(list(normalized_names_pool), people_count)
+    )
+
     subtype = _pick_translation_subtype(mode, quantifier_ratio, rng)
     if subtype == "quantifier":
         result = _build_translation_question_quantifier(
@@ -2366,7 +2378,7 @@ def build_translation_question(
         )
     else:
         result = _build_translation_question_propositional(
-            names_pool=names_pool,
+            names_pool=selected_names_pool,
             actions_pool=actions_pool,
             rng=rng,
         )
@@ -2386,5 +2398,6 @@ def build_translation_question(
                 raise RuntimeError("Postcondizione fallita: formula proposizionale non valida")
 
     result["metadata"]["seed"] = seed
+    result["metadata"]["people_count"] = people_count
     _ensure_keys(result, ["type", "subtype", "question_text", "info", "options", "metadata"])
     return result

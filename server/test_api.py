@@ -171,6 +171,7 @@ class ApiTests(unittest.TestCase):
                     "quantifier_ratio": 0.5,
                     "wrong_options_count": 3,
                     "names_pool": ["Giulia", "Marco"],
+                    "people_count": 2,
                     "actions_pool": ["corre", "salta"],
                     "implied_person_predicate": True,
                     "allow_spoken_mode": False,

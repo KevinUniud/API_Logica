@@ -1355,6 +1355,40 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len(result["options"]), 4)
         self.assertEqual(sum(1 for item in result["options"] if item["is_correct"]), 1)
 
+    def test_translation_question_respects_people_count_subset(self):
+        """Verifica che people_count limiti i nomi usati nel quiz proposizionale."""
+        result = build_translation_question(
+            mode="propositional",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo", "Giulia", "Sofia"],
+            people_count=2,
+            actions_pool=["corre", "salta"],
+            implied_person_predicate=True,
+            allow_spoken_mode=False,
+            seed=9,
+            timeout=10,
+        )
+
+        self.assertLessEqual(len(result["metadata"]["names_used"]), 2)
+        self.assertEqual(result["metadata"]["people_count"], 2)
+
+    def test_translation_question_people_count_cannot_exceed_names_pool(self):
+        """Verifica che people_count non superi il numero di nomi distinti disponibili."""
+        with self.assertRaisesRegex(ValueError, "people_count non può superare"):
+            build_translation_question(
+                mode="propositional",
+                quantifier_ratio=0.5,
+                wrong_options_count=3,
+                names_pool=["Luca", "Matteo"],
+                people_count=3,
+                actions_pool=["corre"],
+                implied_person_predicate=True,
+                allow_spoken_mode=False,
+                seed=1,
+                timeout=10,
+            )
+
 
 class PrologBridgeTests(unittest.TestCase):
     def test_assignment_serializes_terms(self):
