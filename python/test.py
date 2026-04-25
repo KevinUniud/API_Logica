@@ -10,6 +10,7 @@ from generator import build_tvq
 from generator import build_translation_question
 from generator import generate_formula_by_variable_count
 from generator import generate_formula
+from generator import _commutative_signature
 from generator import _formula_has_non_banal_repetitions
 from generator import _select_formulas_with_repetition_policy
 from prolog_bridge import PrologBridge
@@ -441,10 +442,13 @@ class GeneratorTests(unittest.TestCase):
             bridge=_bridge(KnownEntailmentBridge()),
         )
 
-        self.assertEqual(question["question_prolog"], "imp(and(p,q),and(r,s))")
+        self.assertEqual(
+            _commutative_signature(question["question_prolog"]),
+            _commutative_signature("imp(and(p,q),and(r,s))"),
+        )
         self.assertIn(
-            "imp(and(p,q),or(r,s))",
-            [entry["formula_prolog"] for entry in question["correct_options"]],
+            _commutative_signature("imp(and(p,q),or(r,s))"),
+            [_commutative_signature(entry["formula_prolog"]) for entry in question["correct_options"]],
         )
 
     def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
@@ -476,7 +480,10 @@ class GeneratorTests(unittest.TestCase):
             bridge=_bridge(SimpleConsequenceBridge()),
         )
 
-        self.assertEqual(question["question_prolog"], "and(p,q)")
+        self.assertEqual(
+            _commutative_signature(question["question_prolog"]),
+            _commutative_signature("and(p,q)"),
+        )
         self.assertEqual([entry["formula_prolog"] for entry in question["correct_options"]], ["p"])
         self.assertNotIn("and(q,p)", [entry["formula_prolog"] for entry in question["options"]])
 
@@ -722,7 +729,10 @@ class GeneratorTests(unittest.TestCase):
         self.assertIn("original_formula", exercise)
         self.assertIn("modified_formula", exercise)
         self.assertEqual(len(exercise["wrong_answers_prolog"]), 1)
-        self.assertEqual(exercise["original_formula"]["formula_prolog"], "or(and(p,q),and(r,s))")
+        self.assertEqual(
+            _commutative_signature(exercise["original_formula"]["formula_prolog"]),
+            _commutative_signature("or(and(p,q),and(r,s))"),
+        )
 
     def test_ex_depth_uses_auto_selected_vars(self):
         """Verifica che l'esercizio usi il set variabili auto-selezionato."""

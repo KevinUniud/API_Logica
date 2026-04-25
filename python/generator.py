@@ -800,9 +800,43 @@ def _as_ast(expr: Any):
     return from_prolog(expr) if isinstance(expr, str) else expr
 
 
-def _formula_entry(expr: Any, **extra) -> dict:
+def _scramble_commutative_formula(expr: Any, rng: random.Random) -> Any:
+    """Rimescola ricorsivamente i figli di and/or senza cambiare il significato."""
+    ast = _as_ast(expr)
+
+    def transform(node: Any) -> Any:
+        if isinstance(node, Var):
+            return node
+        if isinstance(node, Not):
+            return Not(transform(node.expr))
+        if isinstance(node, Imp):
+            return Imp(transform(node.left), transform(node.right))
+        if isinstance(node, Iff):
+            left = transform(node.left)
+            right = transform(node.right)
+            if rng.random() < 0.5:
+                left, right = right, left
+            return Iff(left, right)
+        if isinstance(node, (And, Or)):
+            op_cls = type(node)
+            terms = [transform(term) for term in _flatten_associative(node, op_cls)]
+            rng.shuffle(terms)
+            return _build_balanced(terms, op_cls, rng)
+        return node
+
+    return transform(ast)
+
+
+def _scramble_formula_prolog(formula: Any, rng: random.Random) -> str:
+    """Restituisce una formula Prolog con and/or rimescolati quando possibile."""
+    return to_prolog(_scramble_commutative_formula(formula, rng))
+
+
+def _formula_entry(expr: Any, *, rng: random.Random | None = None, **extra) -> dict:
     """Crea una voce formula standardizzata per le risposte API."""
-    return formula_payload(_as_ast(expr), **extra)
+    if rng is None:
+        return formula_payload(_as_ast(expr), **extra)
+    return formula_payload(_scramble_commutative_formula(expr, rng), **extra)
 
 
 def _has_atom_count(formula: Any, target_atom_count: int | None) -> bool:
@@ -1601,9 +1635,9 @@ def build_tvq(
         _require_pairwise_distinct(selected_true + selected_false, "build_tvq options")
 
         options = [
-            _formula_entry(formula, is_true=True) for formula in selected_true
+            _formula_entry(formula, rng=rng, is_true=True) for formula in selected_true
         ] + [
-            _formula_entry(formula, is_true=False) for formula in selected_false
+            _formula_entry(formula, rng=rng, is_true=False) for formula in selected_false
         ]
         rng.shuffle(options)
 
@@ -1615,8 +1649,8 @@ def build_tvq(
             "variables": variables,
             "information": list(valuation),
             "options": options,
-            "true_options": [_formula_entry(formula, is_true=True) for formula in selected_true],
-            "false_options": [_formula_entry(formula, is_true=False) for formula in selected_false],
+            "true_options": [_formula_entry(formula, rng=rng, is_true=True) for formula in selected_true],
+            "false_options": [_formula_entry(formula, rng=rng, is_true=False) for formula in selected_false],
             "source": "prolog_assignment_and_eval",
         }
 
@@ -1664,6 +1698,7 @@ def build_logical_consequence_question(
         bridge=bridge,
     )
     question_prolog = _as_prolog(question_formula)
+    question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
 
     candidates = _collect_candidate_formulas(
         bridge=bridge,
@@ -1744,9 +1779,9 @@ def build_logical_consequence_question(
         raise RuntimeError("Postcondizione fallita: formule non distinte nel quiz di conseguenza logica")
 
     options = [
-        _formula_entry(formula, is_consequence=True) for formula in selected_correct
+        _formula_entry(formula, rng=rng, is_consequence=True) for formula in selected_correct
     ] + [
-        _formula_entry(formula, is_consequence=False) for formula in selected_wrong
+        _formula_entry(formula, rng=rng, is_consequence=False) for formula in selected_wrong
     ]
     rng.shuffle(options)
 
@@ -1756,10 +1791,10 @@ def build_logical_consequence_question(
         "correct_options_count": correct_options_count,
         "wrong_options_count": wrong_options_count,
         "variables": variables,
-        "question_prolog": question_prolog,
+        "question_prolog": question_prolog_display,
         "options": options,
-        "correct_options": [_formula_entry(formula, is_consequence=True) for formula in selected_correct],
-        "wrong_options": [_formula_entry(formula, is_consequence=False) for formula in selected_wrong],
+        "correct_options": [_formula_entry(formula, rng=rng, is_consequence=True) for formula in selected_correct],
+        "wrong_options": [_formula_entry(formula, rng=rng, is_consequence=False) for formula in selected_wrong],
         "source": "prolog_implies_formula",
     }
 
@@ -1785,6 +1820,7 @@ def build_exercise(
         _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
     bridge = _ensure_bridge(bridge)
+    rng = random.Random(seed)
 
     question_prolog = to_prolog(expr) if not isinstance(expr, str) else expr
     question_expr = from_prolog(question_prolog)
@@ -1883,12 +1919,14 @@ def build_exercise(
         "build_exercise question/correct/wrongs",
     )
 
-    original_formula = _formula_entry(question_expr, label="formula originale")
+    original_formula = _formula_entry(question_expr, rng=rng, label="formula originale")
     modified_formula = _formula_entry(
         modified_prolog,
+        rng=rng,
         label="formula modificata",
         steps=rewrite_steps,
     )
+    question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
     exercise = {
         "original_formula": original_formula,
         "modified_formula": modified_formula,
@@ -1898,14 +1936,15 @@ def build_exercise(
         "atom_count": question_atom_count,
         "rewrite_steps": rewrite_steps,
         "source": "prolog_builder",
-        "question_prolog": question_prolog,
-        "correct_answer_prolog": modified_prolog,
-        "wrong_answers_prolog": wrong_selected,
+        "question_prolog": question_prolog_display,
+        "correct_answer_prolog": _scramble_formula_prolog(modified_prolog, rng),
+        "wrong_answers_prolog": [_scramble_formula_prolog(formula, rng) for formula in wrong_selected],
     }
 
     for index, wrong_formula in enumerate(wrong_selected, start=1):
         exercise[f"distraction_{index}"] = _formula_entry(
             wrong_formula,
+            rng=rng,
             label=f"formula distrazione n{index}",
         )
 
