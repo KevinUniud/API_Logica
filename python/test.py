@@ -1266,7 +1266,6 @@ class GeneratorTests(unittest.TestCase):
             wrong_options_count=3,
             names_pool=["Luca", "Matteo", "Giulia"],
             actions_pool=["corre", "salta"],
-            implied_person_predicate=True,
             allow_spoken_mode=False,
             seed=42,
             timeout=10,
@@ -1290,7 +1289,6 @@ class GeneratorTests(unittest.TestCase):
             wrong_options_count=3,
             names_pool=["Luca", "Matteo", "Giulia"],
             actions_pool=["corre", "salta", "nuota"],
-            implied_person_predicate=True,
             allow_spoken_mode=False,
             seed=7,
             timeout=10,
@@ -1301,7 +1299,8 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len(result["options"]), 4)
         self.assertEqual(sum(1 for item in result["options"] if item["is_correct"]), 1)
         self.assertEqual(len({item["formula"] for item in result["options"]}), 4)
-        self.assertTrue(all("P(x) = x è una persona" != info for info in result["info"]))
+        self.assertTrue(all("P(x)" not in info for info in result["info"]))
+        self.assertTrue(all("P(x)" not in option["formula"] for option in result["options"]))
 
     def test_translation_question_requires_wrong_options_count_three(self):
         """Verifica che il builder rifiuti wrong_options_count diverso da 3."""
@@ -1312,7 +1311,6 @@ class GeneratorTests(unittest.TestCase):
                 wrong_options_count=2,
                 names_pool=["Luca", "Matteo"],
                 actions_pool=["corre", "salta"],
-                implied_person_predicate=True,
                 allow_spoken_mode=False,
                 seed=1,
                 timeout=10,
@@ -1326,7 +1324,6 @@ class GeneratorTests(unittest.TestCase):
             wrong_options_count=3,
             names_pool=["Luca", "Matteo", "Giulia"],
             actions_pool=["corre", "salta"],
-            implied_person_predicate=True,
             allow_spoken_mode=False,
             seed=13,
             timeout=10,
@@ -1345,7 +1342,6 @@ class GeneratorTests(unittest.TestCase):
             wrong_options_count=3,
             names_pool=["Luca"],
             actions_pool=["corre"],
-            implied_person_predicate=True,
             allow_spoken_mode=False,
             seed=21,
             timeout=10,
@@ -1364,7 +1360,6 @@ class GeneratorTests(unittest.TestCase):
             names_pool=["Luca", "Matteo", "Giulia", "Sofia"],
             people_count=2,
             actions_pool=["corre", "salta"],
-            implied_person_predicate=True,
             allow_spoken_mode=False,
             seed=9,
             timeout=10,
@@ -1383,9 +1378,40 @@ class GeneratorTests(unittest.TestCase):
                 names_pool=["Luca", "Matteo"],
                 people_count=3,
                 actions_pool=["corre"],
-                implied_person_predicate=True,
                 allow_spoken_mode=False,
                 seed=1,
+                timeout=10,
+            )
+
+    def test_translation_question_quantifier_uses_more_predicates_when_people_count_is_higher(self):
+        """Verifica che in quantifier people_count=3 abiliti anche C(x)."""
+        result = build_translation_question(
+            mode="quantifier",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo"],
+            people_count=3,
+            actions_pool=["corre", "salta", "nuota", "ascolta"],
+            allow_spoken_mode=False,
+            seed=5,
+            timeout=10,
+        )
+
+        self.assertTrue(any(info.startswith("C(x)") for info in result["info"]))
+        self.assertTrue(any("C(x)" in option["formula"] for option in result["options"]))
+
+    def test_translation_question_quantifier_requires_actions_pool_for_people_count(self):
+        """Verifica che in quantifier servano almeno people_count azioni disponibili."""
+        with self.assertRaisesRegex(ValueError, "actions_pool deve contenere almeno people_count azioni"):
+            build_translation_question(
+                mode="quantifier",
+                quantifier_ratio=0.5,
+                wrong_options_count=3,
+                names_pool=["Luca", "Matteo"],
+                people_count=3,
+                actions_pool=["corre", "salta"],
+                allow_spoken_mode=False,
+                seed=5,
                 timeout=10,
             )
 

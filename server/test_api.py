@@ -173,7 +173,6 @@ class ApiTests(unittest.TestCase):
                     "names_pool": ["Giulia", "Marco"],
                     "people_count": 2,
                     "actions_pool": ["corre", "salta"],
-                    "implied_person_predicate": True,
                     "allow_spoken_mode": False,
                     "seed": 42,
                     "timeout_seconds": 10,

@@ -2262,50 +2262,84 @@ def _build_translation_question_propositional(
     }
 
 
+def _fold_binary_connective(connective: str, terms: Sequence[str]) -> str:
+    """Combina termini in una catena binaria associativa (es. and(and(a,b),c))."""
+    if not terms:
+        raise ValueError("terms non puo essere vuoto")
+    folded = terms[0]
+    for term in terms[1:]:
+        folded = f"{connective}({folded},{term})"
+    return folded
+
+
+def _predicate_symbols(count: int) -> list[str]:
+    """Restituisce simboli predicato in stile A, B, C, ... per il quiz quantificato."""
+    _req_int_ge("count", count, 1)
+    base = [chr(code) for code in range(ord("A"), ord("Z") + 1)]
+    if count <= len(base):
+        return base[:count]
+
+    extended = list(base)
+    suffix = 1
+    while len(extended) < count:
+        for symbol in base:
+            extended.append(f"{symbol}{suffix}")
+            if len(extended) >= count:
+                break
+        suffix += 1
+    return extended
+
+
 def _build_translation_question_quantifier(
     *,
     actions_pool: Sequence[str],
-    implied_person_predicate: bool,
+    predicate_count: int,
     rng: random.Random,
 ) -> dict[str, Any]:
     """Costruisce un quiz di traduzione con quantificatori."""
-    if len(actions_pool) < 2:
-        raise ValueError("actions_pool deve contenere almeno 2 azioni per il subtype quantifier")
+    _req_int_ge("predicate_count", predicate_count, 1)
+    if len(actions_pool) < predicate_count:
+        raise ValueError("actions_pool deve contenere almeno people_count azioni per il subtype quantifier")
 
-    action_left, action_right = rng.sample(list(actions_pool), 2)
-    left_symbol = "A"
-    right_symbol = "B"
+    selected_actions = rng.sample(list(actions_pool), predicate_count)
+    symbols = _predicate_symbols(predicate_count)
+    predicate_terms = [f"{symbol}(x)" for symbol in symbols]
+    conjunction_body = _fold_binary_connective("and", predicate_terms)
+    disjunction_body = _fold_binary_connective("or", predicate_terms)
+
+    rest_terms = predicate_terms[1:]
+    if rest_terms:
+        implication_body = f"imp({predicate_terms[0]},{_fold_binary_connective('and', rest_terms)})"
+    else:
+        implication_body = f"imp({predicate_terms[0]},not({predicate_terms[0]}))"
+
+    natural_text = " e ".join(f"x {action}" for action in selected_actions)
     quantifier_used = rng.choice(["per_ogni", "esiste"])
 
     if quantifier_used == "per_ogni":
         question_text = (
             "Tradurre la seguente frase in linguaggio logico: "
-            f'"Ogni persona {action_left} e {action_right}"'
+            f'"Per ogni x, {natural_text}"'
         )
-        correct_formula = "forall(x,imp(P(x),and(A(x),B(x))))"
+        correct_formula = f"forall(x,{conjunction_body})"
         wrong_formulas = [
-            "exists(x,and(P(x),and(A(x),B(x))))",
-            "forall(x,and(P(x),and(A(x),B(x))))",
-            "forall(x,imp(and(A(x),B(x)),P(x)))",
+            f"exists(x,{conjunction_body})",
+            f"forall(x,{disjunction_body})",
+            f"forall(x,{implication_body})",
         ]
     else:
         question_text = (
             "Tradurre la seguente frase in linguaggio logico: "
-            f'"Esiste una persona che {action_left} e {action_right}"'
+            f'"Esiste un x tale che {natural_text}"'
         )
-        correct_formula = "exists(x,and(P(x),and(A(x),B(x))))"
+        correct_formula = f"exists(x,{conjunction_body})"
         wrong_formulas = [
-            "forall(x,imp(P(x),and(A(x),B(x))))",
-            "exists(x,imp(P(x),and(A(x),B(x))))",
-            "exists(x,and(P(x),or(A(x),B(x))))",
+            f"forall(x,{conjunction_body})",
+            f"exists(x,{disjunction_body})",
+            f"exists(x,{implication_body})",
         ]
 
-    info = [
-        f"{left_symbol}(x) = x {action_left}",
-        f"{right_symbol}(x) = x {action_right}",
-    ]
-    if not implied_person_predicate:
-        info.insert(0, "P(x) = x è una persona")
+    info = [f"{symbol}(x) = x {action}" for symbol, action in zip(symbols, selected_actions, strict=False)]
 
     options = [
         {"formula": correct_formula, "is_correct": True},
@@ -2324,7 +2358,8 @@ def _build_translation_question_quantifier(
         "metadata": {
             "quantifier_used": quantifier_used,
             "names_used": [],
-            "actions_used": [action_left, action_right],
+            "actions_used": selected_actions,
+            "predicate_symbols_used": symbols,
             "source": "rule_generator",
         },
     }
@@ -2338,7 +2373,6 @@ def build_translation_question(
     names_pool: Sequence[str],
     people_count: int | None = None,
     actions_pool: Sequence[str],
-    implied_person_predicate: bool,
     allow_spoken_mode: bool,
     seed: int | None = None,
     timeout: int = 10,
@@ -2360,23 +2394,23 @@ def build_translation_question(
     _ = allow_spoken_mode
 
     rng = random.Random(seed)
-    normalized_names_pool = [name for name in dict.fromkeys(names_pool)]
-    if people_count is not None and people_count > len(normalized_names_pool):
-        raise ValueError("people_count non può superare il numero di nomi distinti in names_pool")
-    selected_names_pool = (
-        list(normalized_names_pool)
-        if people_count is None
-        else rng.sample(list(normalized_names_pool), people_count)
-    )
-
     subtype = _pick_translation_subtype(mode, quantifier_ratio, rng)
     if subtype == "quantifier":
+        quantifier_predicate_count = people_count if people_count is not None else 2
         result = _build_translation_question_quantifier(
             actions_pool=actions_pool,
-            implied_person_predicate=implied_person_predicate,
+            predicate_count=quantifier_predicate_count,
             rng=rng,
         )
     else:
+        normalized_names_pool = [name for name in dict.fromkeys(names_pool)]
+        if people_count is not None and people_count > len(normalized_names_pool):
+            raise ValueError("people_count non può superare il numero di nomi distinti in names_pool")
+        selected_names_pool = (
+            list(normalized_names_pool)
+            if people_count is None
+            else rng.sample(list(normalized_names_pool), people_count)
+        )
         result = _build_translation_question_propositional(
             names_pool=selected_names_pool,
             actions_pool=actions_pool,
