@@ -2100,6 +2100,85 @@ def _pick_translation_subtype(mode: str, quantifier_ratio: float, rng: random.Ra
     raise ValueError("mode deve essere uno tra: auto, quantifier, propositional")
 
 
+def _pick_symbol_sequence(
+    *,
+    symbols: Sequence[str],
+    length: int,
+    rng: random.Random,
+    repetition_probability: float,
+) -> list[str]:
+    """Seleziona una sequenza di simboli, consentendo ripetizioni controllate."""
+    if length <= 0:
+        raise ValueError("length deve essere > 0")
+    if not symbols:
+        raise ValueError("symbols non puo essere vuoto")
+
+    selected = [rng.choice(list(symbols)) for _ in range(length)]
+    wants_repetition = rng.random() < repetition_probability
+    if wants_repetition and len(selected) > 1:
+        source_index = rng.randrange(len(selected))
+        target_candidates = [idx for idx in range(len(selected)) if idx != source_index]
+        target_index = rng.choice(target_candidates)
+        selected[target_index] = selected[source_index]
+    return selected
+
+
+def _build_propositional_wrong_formulas(*, template_name: str, atoms: Sequence[str], correct_formula: str) -> list[str]:
+    """Genera formule sbagliate robuste anche quando gli atomi si ripetono."""
+    if template_name == "implication":
+        left, right = atoms
+        candidates = [
+            f"imp({right},{left})",
+            f"and({left},{right})",
+            f"or({left},{right})",
+            f"iff({left},{right})",
+            f"imp(not({left}),{right})",
+        ]
+    elif template_name == "conjunction_chain":
+        first, second, third = atoms
+        candidates = [
+            f"or(or({first},{second}),{third})",
+            f"imp(and({first},{second}),{third})",
+            f"imp({first},and({second},{third}))",
+            f"and({first},or({second},{third}))",
+            f"iff(and({first},{second}),{third})",
+        ]
+    elif template_name == "disjunction_chain":
+        first, second, third = atoms
+        candidates = [
+            f"and(and({first},{second}),{third})",
+            f"imp(or({first},{second}),{third})",
+            f"imp({first},or({second},{third}))",
+            f"or({first},and({second},{third}))",
+            f"iff(or({first},{second}),{third})",
+        ]
+    else:
+        raise RuntimeError(f"Template proposizionale non supportato: {template_name}")
+
+    unique_candidates = list(dict.fromkeys(candidate for candidate in candidates if candidate != correct_formula))
+    if len(unique_candidates) >= 3:
+        return unique_candidates[:3]
+
+    fallback = [
+        "imp(P,Q)",
+        "imp(Q,P)",
+        "and(P,Q)",
+        "or(P,Q)",
+        "iff(P,Q)",
+        "and(and(P,Q),R)",
+        "or(or(P,Q),R)",
+    ]
+    for item in fallback:
+        if item != correct_formula and item not in unique_candidates:
+            unique_candidates.append(item)
+        if len(unique_candidates) == 3:
+            break
+
+    if len(unique_candidates) < 3:
+        raise RuntimeError("Impossibile generare 3 opzioni sbagliate distinte per il quiz proposizionale")
+    return unique_candidates
+
+
 def _build_translation_question_propositional(
     *,
     names_pool: Sequence[str],
@@ -2107,25 +2186,57 @@ def _build_translation_question_propositional(
     rng: random.Random,
 ) -> dict[str, Any]:
     """Costruisce un quiz di traduzione in logica proposizionale."""
-    if len(names_pool) < 2:
-        raise ValueError("names_pool deve contenere almeno 2 nomi")
+    if len(names_pool) < 1:
+        raise ValueError("names_pool deve contenere almeno 1 nome")
     if len(actions_pool) < 1:
         raise ValueError("actions_pool deve contenere almeno 1 azione")
 
-    subject_name, target_name = rng.sample(list(names_pool), 2)
     action = rng.choice(list(actions_pool))
+    symbol_to_text = {
+        "P": f"{rng.choice(list(names_pool))} {action}",
+        "Q": f"{rng.choice(list(names_pool))} {action}",
+        "R": f"{rng.choice(list(names_pool))} {action}",
+    }
 
-    question_text = (
-        "Tradurre la seguente frase in linguaggio logico: "
-        f'"Se {subject_name} {action} allora {target_name} {action}"'
+    template_name = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
+    if template_name == "implication":
+        atoms = _pick_symbol_sequence(
+            symbols=["P", "Q", "R"],
+            length=2,
+            rng=rng,
+            repetition_probability=FORMULA_REPETITION_PROBABILITY,
+        )
+        left, right = atoms
+        sentence = f"Se {symbol_to_text[left]} allora {symbol_to_text[right]}"
+        correct_formula = f"imp({left},{right})"
+    elif template_name == "conjunction_chain":
+        atoms = _pick_symbol_sequence(
+            symbols=["P", "Q", "R"],
+            length=3,
+            rng=rng,
+            repetition_probability=FORMULA_REPETITION_PROBABILITY,
+        )
+        first, second, third = atoms
+        sentence = f"{symbol_to_text[first]} e {symbol_to_text[second]} e {symbol_to_text[third]}"
+        correct_formula = f"and(and({first},{second}),{third})"
+    else:
+        atoms = _pick_symbol_sequence(
+            symbols=["P", "Q", "R"],
+            length=3,
+            rng=rng,
+            repetition_probability=FORMULA_REPETITION_PROBABILITY,
+        )
+        first, second, third = atoms
+        sentence = f"{symbol_to_text[first]} o {symbol_to_text[second]} o {symbol_to_text[third]}"
+        correct_formula = f"or(or({first},{second}),{third})"
+
+    question_text = f'Tradurre la seguente frase in linguaggio logico: "{sentence}"'
+    info = [f"{symbol} = {text}" for symbol, text in symbol_to_text.items()]
+    wrong_formulas = _build_propositional_wrong_formulas(
+        template_name=template_name,
+        atoms=atoms,
+        correct_formula=correct_formula,
     )
-    info = [
-        f"P = {subject_name} {action}",
-        f"Q = {target_name} {action}",
-    ]
-
-    correct_formula = "imp(P,Q)"
-    wrong_formulas = ["imp(Q,P)", "and(P,Q)", "imp(not(P),Q)"]
     options = [
         {"formula": correct_formula, "is_correct": True},
         *({"formula": item, "is_correct": False} for item in wrong_formulas),
@@ -2142,8 +2253,10 @@ def _build_translation_question_propositional(
         "wrong_options_count": 3,
         "metadata": {
             "quantifier_used": "none",
-            "names_used": [subject_name, target_name],
+            "names_used": [name for name in names_pool if any(name in text for text in symbol_to_text.values())],
             "actions_used": [action],
+            "template_used": template_name,
+            "repetition_used": len(set(atoms)) < len(atoms),
             "source": "rule_generator",
         },
     }

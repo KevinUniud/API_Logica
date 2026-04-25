@@ -1318,6 +1318,43 @@ class GeneratorTests(unittest.TestCase):
                 timeout=10,
             )
 
+    def test_translation_question_propositional_text_is_parenthesis_free_and_not_ambiguous(self):
+        """Verifica che il testo proposizionale non usi parentesi o mix ambiguo di e/o."""
+        result = build_translation_question(
+            mode="propositional",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo", "Giulia"],
+            actions_pool=["corre", "salta"],
+            implied_person_predicate=True,
+            allow_spoken_mode=False,
+            seed=13,
+            timeout=10,
+        )
+
+        phrase = result["question_text"].split('"', 2)[1]
+        self.assertNotIn("(", phrase)
+        self.assertNotIn(")", phrase)
+        self.assertFalse(" e " in phrase and " o " in phrase)
+
+    def test_translation_question_propositional_allows_repetition_with_single_name_pool(self):
+        """Verifica che la modalita proposizionale supporti la ripetizione anche con un solo nome."""
+        result = build_translation_question(
+            mode="propositional",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca"],
+            actions_pool=["corre"],
+            implied_person_predicate=True,
+            allow_spoken_mode=False,
+            seed=21,
+            timeout=10,
+        )
+
+        self.assertEqual(result["subtype"], "propositional")
+        self.assertEqual(len(result["options"]), 4)
+        self.assertEqual(sum(1 for item in result["options"] if item["is_correct"]), 1)
+
 
 class PrologBridgeTests(unittest.TestCase):
     def test_assignment_serializes_terms(self):
