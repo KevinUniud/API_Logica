@@ -1850,17 +1850,12 @@ def build_ex_depth(
         raise RuntimeError("Nessuna formula generata che usi tutte le variabili richieste")
 
     candidates = list(dict.fromkeys(formulas))
-    rng.shuffle(candidates)
-
-    # Parte da una formula scelta uniformemente per operatore principale
-    # per evitare di privilegiare sempre lo stesso operatore negli esercizi.
-    first_candidate = _pick_by_head(candidates, rng, prefer_or=(len(variables) >= 5))
-    candidates = [first_candidate] + [formula for formula in candidates if formula != first_candidate]
-
-    max_attempts = min(len(candidates), max(8, wrong_answers_count * 4))
+    candidates = _diversify_sample(candidates, len(candidates), rng)
+    initial_attempts = min(len(candidates), max(8, wrong_answers_count * 4))
+    attempt_order = candidates[:initial_attempts] + candidates[initial_attempts:]
 
     last_error: Exception | None = None
-    for formula in candidates[:max_attempts]:
+    for formula in attempt_order:
         try:
             return build_exercise(
                 expr=formula,
@@ -1876,7 +1871,7 @@ def build_ex_depth(
             continue
 
     raise RuntimeError(
-        f"Impossibile costruire un esercizio completo con la profondita richiesta dopo {max_attempts} tentativi"
+        f"Impossibile costruire un esercizio completo con la profondita richiesta dopo aver provato {len(attempt_order)} candidati"
     ) from last_error
 
 

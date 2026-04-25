@@ -549,14 +549,74 @@ class GeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(exercise["modified_formula"]["steps"], 1)
 
     def test_ex_depth_retry_formula(self):
-        """Con vincoli piu stretti, il retry puo esaurire i candidati e fallire in modo controllato."""
-        with self.assertRaisesRegex(RuntimeError, "Impossibile costruire un esercizio completo"):
-            build_ex_depth(
-                depth=2,
-                wrong_answers_count=1,
-                seed=1,
-                bridge=_bridge(RetryBridge()),
-            )
+        """Verifica che il retry raggiunga un candidato valido invece di esaurire subito la pool."""
+        class LateSuccessBridge(FakeBridge):
+            def formula_of_depth(self, depth, variables, timeout=10):
+                """Espone prima una formula che fallisce e poi una che puo riuscire."""
+                return ["and(and(p,q),and(r,s))", "or(and(p,q),and(r,s))"]
+
+            def some_depth(self, depth, variables, limit, timeout=10):
+                """Restituisce il piccolo pool ordinato usato dal retry."""
+                return self.formula_of_depth(depth, variables, timeout=timeout)[:limit]
+
+            def rewrite_path(self, expr, timeout=10):
+                """La prima formula non supera la soglia minima, la seconda sì."""
+                if expr == "and(and(p,q),and(r,s))":
+                    return [expr, "or(and(p,q),and(r,s))"]
+                if expr == "or(and(p,q),and(r,s))":
+                    return [expr, "imp(and(p,q),and(r,s))", "iff(and(p,q),and(r,s))"]
+                return [expr]
+
+            def rewrite_formula(self, expr, timeout=10):
+                """Allinea il fallback al percorso di riscrittura del test."""
+                if expr == "and(and(p,q),and(r,s))":
+                    return ["or(and(and(p,q),and(r,s)),and(p,q))"]
+                if expr == "or(and(p,q),and(r,s))":
+                    return ["imp(and(and(p,q),and(r,s)),and(p,q))"]
+                return [expr]
+
+            def equiv(self, left, right, vars_list=None, timeout=10):
+                """Rende equivalenti solo i candidati previsti dal test."""
+                if left == "and(and(p,q),and(r,s))":
+                    return right in {"or(and(p,q),and(r,s))", "or(and(and(p,q),and(r,s)),and(p,q))"}
+                if left == "or(and(p,q),and(r,s))":
+                    return right in {
+                        "imp(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                        "imp(and(and(p,q),and(r,s)),and(p,q))",
+                    }
+                return super().equiv(left, right, vars_list=vars_list, timeout=timeout)
+
+            def all_step_neq(self, expr, timeout=10):
+                """Restituisce distractor sufficienti solo per la formula che deve vincere."""
+                if expr == "or(and(p,q),and(r,s))":
+                    return [
+                        "and(and(p,q),and(r,s))",
+                        "imp(and(p,q),and(r,s))",
+                        "iff(and(p,q),and(r,s))",
+                    ]
+                return []
+
+            def one_step_neq(self, expr, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def non_equivalent_distraction(self, expr, max_steps, timeout=10):
+                return self.all_step_neq(expr, timeout=timeout)
+
+            def not_equiv(self, left, right, vars_list=None, timeout=10):
+                return True
+
+        exercise = build_ex_depth(
+            depth=2,
+            wrong_answers_count=1,
+            seed=1,
+            bridge=_bridge(LateSuccessBridge()),
+        )
+
+        self.assertIn("original_formula", exercise)
+        self.assertIn("modified_formula", exercise)
+        self.assertEqual(len(exercise["wrong_answers_prolog"]), 1)
+        self.assertEqual(exercise["original_formula"]["formula_prolog"], "or(and(p,q),and(r,s))")
 
     def test_ex_depth_uses_auto_selected_vars(self):
         """Verifica che l'esercizio usi il set variabili auto-selezionato."""
