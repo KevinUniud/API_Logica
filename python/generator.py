@@ -2474,6 +2474,29 @@ def build_translation_question(
     return result
 
 
+def _question_identity_key(operation: str, result: Any) -> str:
+    """Costruisce una chiave stabile per identificare domande duplicate nel batch."""
+    if not isinstance(result, dict):
+        return f"{operation}|{json.dumps(result, sort_keys=True, ensure_ascii=False)}"
+
+    if "question_text" in result:
+        identity = {
+            "question_text": result.get("question_text"),
+            "subtype": result.get("subtype"),
+        }
+    elif "question_prolog" in result:
+        identity = {"question_prolog": result.get("question_prolog")}
+    elif "information" in result:
+        identity = {
+            "information": result.get("information"),
+            "predicate_count": result.get("predicate_count"),
+        }
+    else:
+        identity = result
+
+    return f"{operation}|{json.dumps(identity, sort_keys=True, ensure_ascii=False)}"
+
+
 def multiple_questions(
     questions: Sequence[dict[str, Any]],
     seed: int | None = None,
@@ -2502,10 +2525,13 @@ def multiple_questions(
         "build_logical_consequence_question",
         "build_translation_question",
     }
+    max_attempts = 4
+    used_question_keys: set[str] = set()
 
     envelopes: list[dict[str, Any]] = []
     for index, item in enumerate(questions):
         envelope: dict[str, Any] = {"index": index}
+        attempts = 0
         try:
             if not isinstance(item, dict):
                 raise ValueError("Ogni elemento di questions deve essere un oggetto")
@@ -2530,23 +2556,51 @@ def multiple_questions(
             if seed is not None and "seed" not in normalized_payload:
                 normalized_payload["seed"] = seed
 
-            if normalized_operation == "build_exercise":
-                result = build_exercise(bridge=bridge, **normalized_payload)
-            elif normalized_operation == "build_ex_depth":
-                result = build_ex_depth(bridge=bridge, **normalized_payload)
-            elif normalized_operation == "build_tvq":
-                result = build_tvq(bridge=bridge, **normalized_payload)
-            elif normalized_operation == "build_logical_consequence_question":
-                result = build_logical_consequence_question(bridge=bridge, **normalized_payload)
-            else:
-                result = build_translation_question(**normalized_payload)
+            last_error: Exception | None = None
+            used_payload: dict[str, Any] = dict(normalized_payload)
+            result: Any = None
+            question_key: str | None = None
+
+            for attempt in range(1, max_attempts + 1):
+                attempts = attempt
+                attempt_payload = dict(normalized_payload)
+                if isinstance(attempt_payload.get("seed"), int):
+                    attempt_payload["seed"] = int(attempt_payload["seed"]) + (attempt - 1)
+
+                try:
+                    if normalized_operation == "build_exercise":
+                        result = build_exercise(bridge=bridge, **attempt_payload)
+                    elif normalized_operation == "build_ex_depth":
+                        result = build_ex_depth(bridge=bridge, **attempt_payload)
+                    elif normalized_operation == "build_tvq":
+                        result = build_tvq(bridge=bridge, **attempt_payload)
+                    elif normalized_operation == "build_logical_consequence_question":
+                        result = build_logical_consequence_question(bridge=bridge, **attempt_payload)
+                    else:
+                        result = build_translation_question(**attempt_payload)
+
+                    question_key = _question_identity_key(normalized_operation, result)
+                    if question_key in used_question_keys:
+                        last_error = RuntimeError("Domanda duplicata nel batch")
+                        continue
+
+                    used_payload = attempt_payload
+                    used_question_keys.add(question_key)
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    continue
+
+            if last_error is not None:
+                raise last_error
 
             envelope.update(
                 {
                     "operation": normalized_operation,
-                    "request": normalized_payload,
+                    "request": used_payload,
                     "status": "ok",
-                    "attempts": 1,
+                    "attempts": attempts,
                     "result": result,
                 }
             )
@@ -2556,7 +2610,7 @@ def multiple_questions(
                     "operation": item.get("operation") if isinstance(item, dict) else None,
                     "request": item.get("payload") if isinstance(item, dict) else None,
                     "status": "failed",
-                    "attempts": 1,
+                    "attempts": attempts if attempts > 0 else 1,
                     "error": str(exc),
                     "result": None,
                 }

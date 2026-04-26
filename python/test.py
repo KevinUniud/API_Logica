@@ -303,6 +303,33 @@ class GeneratorTests(unittest.TestCase):
         self.assertIsNone(failed_entries[0]["result"])
         self.assertIn("boom", failed_entries[0]["error"])
 
+    def test_multiple_questions_avoids_duplicate_questions(self):
+        """Verifica che il batch eviti domande duplicate usando retry interni."""
+
+        def ex_depth_side_effect(*, bridge=None, **kwargs):
+            if kwargs.get("seed") == 10:
+                return {"type": "exercise_from_depth", "question_prolog": "and(p,q)", "tag": "q1"}
+            return {"type": "exercise_from_depth", "question_prolog": "or(p,q)", "tag": "q2"}
+
+        with patch("generator.build_ex_depth", side_effect=ex_depth_side_effect):
+            batch = multiple_questions(
+                [
+                    {"operation": "build_ex_depth", "payload": {"seed": 10, "wrong_answers_count": 1}},
+                    {"operation": "build_ex_depth", "payload": {"seed": 10, "wrong_answers_count": 1}},
+                ],
+                seed=42,
+                bridge=_bridge(FakeBridge()),
+            )
+
+        self.assertEqual(batch["count"], 2)
+        self.assertEqual(batch["success_count"], 2)
+        self.assertEqual(batch["failed_count"], 0)
+
+        question_values = [entry["result"]["question_prolog"] for entry in batch["questions"] if entry["status"] == "ok"]
+        self.assertEqual(len(question_values), 2)
+        self.assertEqual(len(set(question_values)), 2)
+        self.assertIn(2, [entry["attempts"] for entry in batch["questions"] if entry["status"] == "ok"])
+
     def test_ex_depth_defaults_to_allowed_variable_sets(self):
         """Verifica che build_ex_depth senza variables usi solo {p,q,r,s} o {p,q,r,s,t}."""
 
