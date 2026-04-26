@@ -1793,8 +1793,6 @@ def build_logical_consequence_question(
         "variables": variables,
         "question_prolog": question_prolog_display,
         "options": options,
-        "correct_options": [_formula_entry(formula, rng=rng, is_consequence=True) for formula in selected_correct],
-        "wrong_options": [_formula_entry(formula, rng=rng, is_consequence=False) for formula in selected_wrong],
         "source": "prolog_implies_formula",
     }
 
@@ -2474,3 +2472,108 @@ def build_translation_question(
     result["metadata"]["people_count"] = people_count
     _ensure_keys(result, ["type", "subtype", "question_text", "info", "options", "metadata"])
     return result
+
+
+def multiple_questions(
+    questions: Sequence[dict[str, Any]],
+    seed: int | None = None,
+    bridge: PrologBridge | None = None,
+) -> dict[str, Any]:
+    """Costruisce piu domande in una singola chiamata e mescola l'output finale.
+
+    Il batch e fail-soft: un singolo errore viene catturato e restituito nel suo envelope
+    senza interrompere la generazione degli altri elementi.
+    """
+    if not questions:
+        raise ValueError("questions non può essere vuoto")
+
+    bridge = _ensure_bridge(bridge)
+    rng = random.Random(seed)
+
+    operation_aliases = {
+        "build_exercise_from_depth": "build_ex_depth",
+        "build_truth_value_options_question": "build_tvq",
+    }
+
+    supported_operations = {
+        "build_exercise",
+        "build_ex_depth",
+        "build_tvq",
+        "build_logical_consequence_question",
+        "build_translation_question",
+    }
+
+    envelopes: list[dict[str, Any]] = []
+    for index, item in enumerate(questions):
+        envelope: dict[str, Any] = {"index": index}
+        try:
+            if not isinstance(item, dict):
+                raise ValueError("Ogni elemento di questions deve essere un oggetto")
+
+            operation = item.get("operation")
+            if not isinstance(operation, str) or not operation:
+                raise ValueError("Ogni elemento di questions deve contenere una stringa operation")
+
+            normalized_operation = operation_aliases.get(operation, operation)
+            if normalized_operation not in supported_operations:
+                raise ValueError(
+                    f"Operazione non supportata in multiple_questions: {operation}. "
+                    f"Operazioni supportate: {sorted(supported_operations | set(operation_aliases))}"
+                )
+
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                raise ValueError("Ogni elemento di questions deve contenere un payload oggetto")
+
+            normalized_payload = dict(payload)
+            normalized_payload.pop("bridge", None)
+            if seed is not None and "seed" not in normalized_payload:
+                normalized_payload["seed"] = seed
+
+            if normalized_operation == "build_exercise":
+                result = build_exercise(bridge=bridge, **normalized_payload)
+            elif normalized_operation == "build_ex_depth":
+                result = build_ex_depth(bridge=bridge, **normalized_payload)
+            elif normalized_operation == "build_tvq":
+                result = build_tvq(bridge=bridge, **normalized_payload)
+            elif normalized_operation == "build_logical_consequence_question":
+                result = build_logical_consequence_question(bridge=bridge, **normalized_payload)
+            else:
+                result = build_translation_question(**normalized_payload)
+
+            envelope.update(
+                {
+                    "operation": normalized_operation,
+                    "request": normalized_payload,
+                    "status": "ok",
+                    "attempts": 1,
+                    "result": result,
+                }
+            )
+        except Exception as exc:
+            envelope.update(
+                {
+                    "operation": item.get("operation") if isinstance(item, dict) else None,
+                    "request": item.get("payload") if isinstance(item, dict) else None,
+                    "status": "failed",
+                    "attempts": 1,
+                    "error": str(exc),
+                    "result": None,
+                }
+            )
+
+        envelopes.append(envelope)
+
+    rng.shuffle(envelopes)
+    success_count = sum(1 for envelope in envelopes if envelope.get("status") == "ok")
+    failed_count = len(envelopes) - success_count
+    batch = {
+        "type": "multiple_questions",
+        "seed": seed,
+        "count": len(envelopes),
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "questions": envelopes,
+    }
+    _ensure_keys(batch, ["type", "count", "success_count", "failed_count", "questions"])
+    return batch

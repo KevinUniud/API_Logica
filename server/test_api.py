@@ -4,7 +4,7 @@ import os
 
 from fastapi.testclient import TestClient
 
-from server import app
+from server.server import app
 
 
 class ApiTests(unittest.TestCase):
@@ -25,6 +25,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("/api/generator/generate-formula-by-variable-count", schema["paths"])
         self.assertIn("/api/generator/build-logical-consequence-question", schema["paths"])
         self.assertIn("/api/generator/build-translation-question", schema["paths"])
+        self.assertIn("/api/generator/multiple-questions", schema["paths"])
         self.assertIn("/api/prolog-bridge/logic/eval", schema["paths"])
         self.assertIn("/api/prolog-bridge/distractions/one-step-distraction", schema["paths"])
 
@@ -39,7 +40,7 @@ class ApiTests(unittest.TestCase):
             "modified_formula": {"label": "formula modificata"},
             "wrong_answers_prolog": ["a", "b", "c"],
         }
-        with patch("server.generator.build_ex_depth", return_value=fake_result):
+        with patch("server.server.generator.build_ex_depth", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-exercise-from-depth",
                 json={"seed": 42},
@@ -65,7 +66,7 @@ class ApiTests(unittest.TestCase):
             "true_options_count": 1,
             "false_options_count": 1,
         }
-        with patch("server.generator.build_tvq", return_value=fake_result):
+        with patch("server.server.generator.build_tvq", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-truth-value-options-question",
                 json={"predicate_count": 4, "true_options_count": 1, "false_options_count": 1, "seed": 42},
@@ -83,7 +84,7 @@ class ApiTests(unittest.TestCase):
     def test_formula_by_variable_count_endpoint(self):
         """Verifica l'endpoint che genera formula con numero variabili specifico."""
         fake_result = "and(p,or(q,r))"
-        with patch("server.generator.generate_formula_by_variable_count", return_value=fake_result):
+        with patch("server.server.generator.generate_formula_by_variable_count", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/generate-formula-by-variable-count",
                 json={"variable_count": 3, "seed": 42},
@@ -103,7 +104,7 @@ class ApiTests(unittest.TestCase):
                 {"formula_prolog": "iff(p,q)", "is_consequence": False},
             ],
         }
-        with patch("server.generator.build_logical_consequence_question", return_value=fake_result):
+        with patch("server.server.generator.build_logical_consequence_question", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-logical-consequence-question",
                 json={
@@ -125,7 +126,7 @@ class ApiTests(unittest.TestCase):
     def test_logical_consequence_runtime_error_is_422(self):
         """Verifica che gli errori runtime del generatore vengano esposti come 422."""
         with patch(
-            "server.generator.build_logical_consequence_question",
+                "server.server.generator.build_logical_consequence_question",
             side_effect=RuntimeError("Impossibile trovare abbastanza opzioni"),
         ):
             response = self.client.post(
@@ -163,7 +164,7 @@ class ApiTests(unittest.TestCase):
                 "source": "rule_generator",
             },
         }
-        with patch("server.generator.build_translation_question", return_value=fake_result):
+        with patch("server.server.generator.build_translation_question", return_value=fake_result):
             response = self.client.post(
                 "/api/generator/build-translation-question",
                 json={
@@ -185,11 +186,72 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["result"]["type"], "translation_question")
         self.assertEqual(payload["result"]["wrong_options_count"], 3)
 
+    def test_multiple_questions_endpoint(self):
+        """Verifica l'endpoint batch per piu domande miste."""
+        fake_result = {
+            "type": "multiple_questions",
+            "count": 2,
+            "success_count": 1,
+            "failed_count": 1,
+            "questions": [
+                {
+                    "index": 1,
+                    "operation": "build_tvq",
+                    "request": {"predicate_count": 4},
+                    "status": "ok",
+                    "attempts": 1,
+                    "result": {"tag": "tvq"},
+                },
+                {
+                    "index": 0,
+                    "operation": "build_translation_question",
+                    "request": {"mode": "auto"},
+                    "status": "failed",
+                    "attempts": 1,
+                    "error": "boom",
+                    "result": None,
+                },
+            ],
+            "seed": 42,
+        }
+        with patch("server.server.generator.multiple_questions", return_value=fake_result):
+            response = self.client.post(
+                "/api/generator/multiple-questions",
+                json={
+                    "seed": 42,
+                    "questions": [
+                        {"operation": "build_tvq", "payload": {"predicate_count": 4, "true_options_count": 1, "false_options_count": 1}},
+                        {
+                            "operation": "build_translation_question",
+                            "payload": {
+                                "mode": "auto",
+                                "quantifier_ratio": 0.5,
+                                "wrong_options_count": 3,
+                                "names_pool": ["Luca", "Marco"],
+                                "people_count": 2,
+                                "actions_pool": ["corre", "salta"],
+                                "allow_spoken_mode": False,
+                            },
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["operation"], "generator_multiple_questions")
+        self.assertEqual(payload["result"]["type"], "multiple_questions")
+        self.assertEqual(len(payload["result"]["questions"]), 2)
+        self.assertEqual(payload["result"]["questions"][0]["operation"], "build_tvq")
+        self.assertEqual(payload["result"]["questions"][1]["operation"], "build_translation_question")
+        self.assertEqual(payload["result"]["success_count"], 1)
+        self.assertEqual(payload["result"]["failed_count"], 1)
+
     def test_template_endpoint(self):
         """Verifica l'endpoint template con bridge mockato."""
         fake_bridge = Mock()
         fake_bridge.formula_of_depth.return_value = ["and(p,q)"]
-        with patch("server._build_bridge", return_value=fake_bridge):
+        with patch("server.server._build_bridge", return_value=fake_bridge):
             response = self.client.post(
                 "/api/prolog-bridge/templates/formula-of-depth",
                 json={"depth": 1, "variables": ["p", "q"]},
@@ -205,7 +267,7 @@ class ApiTests(unittest.TestCase):
         """Verifica l'endpoint di valutazione logica sotto una valutazione."""
         fake_bridge = Mock()
         fake_bridge.eval.return_value = False
-        with patch("server._build_bridge", return_value=fake_bridge):
+        with patch("server.server._build_bridge", return_value=fake_bridge):
             response = self.client.post(
                 "/api/prolog-bridge/logic/eval",
                 json={

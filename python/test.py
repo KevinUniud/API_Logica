@@ -2,10 +2,12 @@ import unittest
 from collections import Counter
 import random
 from typing import cast
+from unittest.mock import patch
 
 from ast_logic import And, Iff, Imp, Not, Or, Var
 from generator import build_ex_depth
 from generator import build_logical_consequence_question
+from generator import multiple_questions
 from generator import build_tvq
 from generator import build_translation_question
 from generator import generate_formula_by_variable_count
@@ -202,6 +204,104 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(len({entry["formula_prolog"] for entry in question["false_options"]}), 2)
         self.assertTrue(all(entry["is_true"] for entry in question["true_options"]))
         self.assertTrue(all(not entry["is_true"] for entry in question["false_options"]))
+
+    def test_multiple_questions_dispatches_and_shuffles_results(self):
+        """Verifica il batch misto e il mescolamento dell'output finale."""
+        fake_ex_depth = {"type": "exercise_from_depth", "tag": "depth"}
+        fake_tvq = {"type": "truth_value_options_question", "tag": "tvq"}
+        fake_logic = {"type": "logical_consequence_question", "tag": "logic"}
+        fake_translation = {"type": "translation_question", "tag": "translation"}
+
+        batch_requests = [
+            {"operation": "build_ex_depth", "payload": {"seed": 1, "wrong_answers_count": 1}},
+            {
+                "operation": "build_tvq",
+                "payload": {"predicate_count": 4, "true_options_count": 1, "false_options_count": 1, "seed": 2},
+            },
+            {
+                "operation": "build_logical_consequence_question",
+                "payload": {"variable_count": 3, "correct_options_count": 1, "wrong_options_count": 1, "seed": 3},
+            },
+            {
+                "operation": "build_translation_question",
+                "payload": {
+                    "mode": "auto",
+                    "quantifier_ratio": 0.5,
+                    "wrong_options_count": 3,
+                    "names_pool": ["Luca", "Marco"],
+                    "people_count": 2,
+                    "actions_pool": ["corre", "salta"],
+                    "allow_spoken_mode": False,
+                    "seed": 4,
+                    "timeout": 10,
+                },
+            },
+        ]
+
+        with patch("generator.build_ex_depth", return_value=fake_ex_depth), patch(
+            "generator.build_tvq", return_value=fake_tvq
+        ), patch("generator.build_logical_consequence_question", return_value=fake_logic), patch(
+            "generator.build_translation_question", return_value=fake_translation
+        ):
+            batch = multiple_questions(batch_requests, seed=42, bridge=_bridge(FakeBridge()))
+
+        self.assertEqual(batch["type"], "multiple_questions")
+        self.assertEqual(batch["count"], 4)
+        self.assertEqual(len(batch["questions"]), 4)
+
+        operations = [entry["operation"] for entry in batch["questions"]]
+        self.assertEqual(set(operations), {"build_ex_depth", "build_tvq", "build_logical_consequence_question", "build_translation_question"})
+        self.assertNotEqual(operations, [request["operation"] for request in batch_requests])
+
+        tags_by_operation = {entry["operation"]: entry["result"]["tag"] for entry in batch["questions"]}
+        self.assertEqual(tags_by_operation["build_ex_depth"], "depth")
+        self.assertEqual(tags_by_operation["build_tvq"], "tvq")
+        self.assertEqual(tags_by_operation["build_logical_consequence_question"], "logic")
+        self.assertEqual(tags_by_operation["build_translation_question"], "translation")
+
+    def test_multiple_questions_marks_unknown_operation_as_failed(self):
+        """Verifica che il batch segnali come fallita un'operazione non supportata."""
+        batch = multiple_questions([
+            {"operation": "build_unknown_question", "payload": {}}
+        ], seed=42)
+
+        self.assertEqual(batch["count"], 1)
+        self.assertEqual(batch["success_count"], 0)
+        self.assertEqual(batch["failed_count"], 1)
+        self.assertEqual(batch["questions"][0]["status"], "failed")
+        self.assertEqual(batch["questions"][0]["operation"], "build_unknown_question")
+        self.assertIn("Operazione non supportata", batch["questions"][0]["error"])
+
+    def test_multiple_questions_is_fail_soft(self):
+        """Verifica che il batch continui anche se un item fallisce."""
+        with patch("generator.build_ex_depth", return_value={"type": "exercise_from_depth", "tag": "depth"}), patch(
+            "generator.build_tvq", side_effect=RuntimeError("boom")
+        ):
+            batch = multiple_questions(
+                [
+                    {"operation": "build_ex_depth", "payload": {"seed": 1, "wrong_answers_count": 1}},
+                    {
+                        "operation": "build_tvq",
+                        "payload": {"predicate_count": 4, "true_options_count": 1, "false_options_count": 1, "seed": 2},
+                    },
+                ],
+                seed=42,
+                bridge=_bridge(FakeBridge()),
+            )
+
+        self.assertEqual(batch["count"], 2)
+        self.assertEqual(batch["success_count"], 1)
+        self.assertEqual(batch["failed_count"], 1)
+
+        ok_entries = [entry for entry in batch["questions"] if entry["status"] == "ok"]
+        failed_entries = [entry for entry in batch["questions"] if entry["status"] == "failed"]
+        self.assertEqual(len(ok_entries), 1)
+        self.assertEqual(len(failed_entries), 1)
+        self.assertEqual(ok_entries[0]["operation"], "build_ex_depth")
+        self.assertEqual(ok_entries[0]["result"]["tag"], "depth")
+        self.assertEqual(failed_entries[0]["operation"], "build_tvq")
+        self.assertIsNone(failed_entries[0]["result"])
+        self.assertIn("boom", failed_entries[0]["error"])
 
     def test_ex_depth_defaults_to_allowed_variable_sets(self):
         """Verifica che build_ex_depth senza variables usi solo {p,q,r,s} o {p,q,r,s,t}."""
@@ -404,10 +504,12 @@ class GeneratorTests(unittest.TestCase):
 
         self.assertEqual(question["variable_count"], 3)
         self.assertNotIn("consequence_semantics", question)
-        self.assertEqual(len(question["correct_options"]), 2)
-        self.assertEqual(len(question["wrong_options"]), 2)
-        self.assertTrue(all(entry["is_consequence"] for entry in question["correct_options"]))
-        self.assertTrue(all(not entry["is_consequence"] for entry in question["wrong_options"]))
+        correct_entries = [entry for entry in question["options"] if entry["is_consequence"]]
+        wrong_entries = [entry for entry in question["options"] if not entry["is_consequence"]]
+        self.assertEqual(len(correct_entries), 2)
+        self.assertEqual(len(wrong_entries), 2)
+        self.assertTrue(all(entry["is_consequence"] for entry in correct_entries))
+        self.assertTrue(all(not entry["is_consequence"] for entry in wrong_entries))
         option_heads = {entry["formula_prolog"].split("(", 1)[0] for entry in question["options"]}
         self.assertGreaterEqual(len(option_heads), 2)
 
@@ -448,7 +550,11 @@ class GeneratorTests(unittest.TestCase):
         )
         self.assertIn(
             _commutative_signature("imp(and(p,q),or(r,s))"),
-            [_commutative_signature(entry["formula_prolog"]) for entry in question["correct_options"]],
+            [
+                _commutative_signature(entry["formula_prolog"])
+                for entry in question["options"]
+                if entry["is_consequence"]
+            ],
         )
 
     def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
@@ -484,7 +590,10 @@ class GeneratorTests(unittest.TestCase):
             _commutative_signature(question["question_prolog"]),
             _commutative_signature("and(p,q)"),
         )
-        self.assertEqual([entry["formula_prolog"] for entry in question["correct_options"]], ["p"])
+        self.assertEqual(
+            [entry["formula_prolog"] for entry in question["options"] if entry["is_consequence"]],
+            ["p"],
+        )
         self.assertNotIn("and(q,p)", [entry["formula_prolog"] for entry in question["options"]])
 
     def test_logical_consequence_rejects_adjacent_duplicate_atoms(self):
