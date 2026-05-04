@@ -2221,31 +2221,35 @@ def _build_translation_question_propositional(
     names_pool: Sequence[str],
     actions_pool: Sequence[str],
     rng: random.Random,
+    template_name: str,
 ) -> dict[str, Any]:
     """Costruisce un quiz di traduzione in logica proposizionale."""
     if len(names_pool) < 1:
         raise ValueError("names_pool deve contenere almeno 1 nome")
     if len(actions_pool) < 1:
         raise ValueError("actions_pool deve contenere almeno 1 azione")
+    if template_name not in ["implication", "conjunction_chain", "disjunction_chain"]:
+        raise ValueError(f"template_name non valido: {template_name}")
 
-    action = rng.choice(list(actions_pool))
-    template_name = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
     symbol_pool = ["P", "Q", "R"]
 
     # Usiamo solo i simboli effettivamente presenti nella frase generata.
     atoms = rng.sample(symbol_pool, k=2 if template_name == "implication" else 3)
     used_symbols = list(dict.fromkeys(atoms))
 
-    possible_texts = [f"{name} {act}" for name in names_pool for act in actions_pool]
-    if len(possible_texts) >= len(used_symbols):
-        chosen_texts = rng.sample(possible_texts, k=len(used_symbols))
-        symbol_to_text = dict(zip(used_symbols, chosen_texts, strict=True))
-    else:
-        # Quando non ci sono abbastanza combinazioni distinte, manteniamo il fallback.
-        symbol_to_text = {
-            symbol: f"{rng.choice(list(names_pool))} {action}"
-            for symbol in used_symbols
-        }
+    num_symbols = len(used_symbols)
+    
+    # Campiona azioni distinte per ogni simbolo
+    num_actions_needed = min(num_symbols, len(actions_pool))
+    selected_actions = rng.sample(list(actions_pool), k=num_actions_needed)
+    
+    # Costruisci combinazioni name+action per ogni simbolo
+    symbol_to_text = {}
+    for i, symbol in enumerate(used_symbols):
+        # Cicla tra le persone e azioni selezionate per garantire diversità
+        name = names_pool[i % len(names_pool)]
+        action = selected_actions[i % len(selected_actions)]
+        symbol_to_text[symbol] = f"{name} {action}"
     if template_name == "implication":
         left, right = atoms
         sentence = f"Se {symbol_to_text[left]} allora {symbol_to_text[right]}"
@@ -2283,7 +2287,7 @@ def _build_translation_question_propositional(
         "metadata": {
             "quantifier_used": "none",
             "names_used": [name for name in names_pool if any(name in text for text in symbol_to_text.values())],
-            "actions_used": [action],
+            "actions_used": list(selected_actions),
             "template_used": template_name,
             "repetition_used": len(set(atoms)) < len(atoms),
             "source": "rule_generator",
@@ -2440,10 +2444,18 @@ def build_translation_question(
             if people_count is None
             else rng.sample(list(normalized_names_pool), people_count)
         )
+        # Sceglie il template in base a people_count
+        if people_count is not None and people_count >= 3:
+            # Per 3+ persone, usa template con 3 simboli
+            chosen_template = rng.choice(["conjunction_chain", "disjunction_chain"])
+        else:
+            # Scelta casuale tra tutti i template
+            chosen_template = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
         result = _build_translation_question_propositional(
             names_pool=selected_names_pool,
             actions_pool=actions_pool,
             rng=rng,
+            template_name=chosen_template,
         )
 
     options = result["options"]
