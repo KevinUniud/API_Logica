@@ -2229,13 +2229,34 @@ def _build_translation_question_propositional(
         raise ValueError("actions_pool deve contenere almeno 1 azione")
 
     action = rng.choice(list(actions_pool))
-    symbol_to_text = {
-        "P": f"{rng.choice(list(names_pool))} {action}",
-        "Q": f"{rng.choice(list(names_pool))} {action}",
-        "R": f"{rng.choice(list(names_pool))} {action}",
-    }
 
     template_name = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
+
+    # Determine how many distinct symbol texts we need (2 for implication, 3 otherwise)
+    symbols_needed = 2 if template_name == "implication" else 3
+
+    # Build possible distinct texts from names x actions
+    possible_texts = [f"{name} {act}" for name in names_pool for act in actions_pool]
+
+    if len(possible_texts) >= symbols_needed:
+        # Choose distinct texts when possible to avoid duplicate hypotheses
+        chosen_texts = rng.sample(possible_texts, k=symbols_needed)
+        # Fill symbol_to_text mapping ensuring all symbols exist
+        all_symbols = ["P", "Q", "R"]
+        symbol_to_text = {}
+        for i, sym in enumerate(all_symbols):
+            if i < symbols_needed:
+                symbol_to_text[sym] = chosen_texts[i]
+            else:
+                # For unused extra symbols, pick a random (possibly duplicate) fallback
+                symbol_to_text[sym] = f"{rng.choice(list(names_pool))} {action}"
+    else:
+        # Not enough distinct combos available: fall back to previous behavior (allow repetitions)
+        symbol_to_text = {
+            "P": f"{rng.choice(list(names_pool))} {action}",
+            "Q": f"{rng.choice(list(names_pool))} {action}",
+            "R": f"{rng.choice(list(names_pool))} {action}",
+        }
     if template_name == "implication":
         atoms = _pick_symbol_sequence(
             symbols=["P", "Q", "R"],
