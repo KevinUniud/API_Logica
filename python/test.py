@@ -1428,7 +1428,7 @@ class GeneratorTests(unittest.TestCase):
             self.assertNotIn("x", option["formula"])
 
     def test_translation_question_propositional_unique_symbol_texts(self):
-        """Verifica che i testi assegnati a P/Q/R siano distinti quando possibile."""
+        """Verifica che le ipotesi generate siano distinte e pertinenti alla frase."""
         result = build_translation_question(
             mode="propositional",
             quantifier_ratio=0.5,
@@ -1441,9 +1441,11 @@ class GeneratorTests(unittest.TestCase):
         )
 
         infos = result["info"]
-        # info contains three mappings like 'P = Luca corre'
-        self.assertEqual(len(infos), 3)
         self.assertEqual(len(set(infos)), 3)
+        phrase = result["question_text"].split('"', 2)[1]
+        for entry in infos:
+            hypothesis_text = entry.split(" = ", 1)[1]
+            self.assertIn(hypothesis_text, phrase)
 
     def test_translation_question_quantifier_contract(self):
         """Verifica il contratto del quiz di traduzione in modalita quantifier."""

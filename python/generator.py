@@ -2229,67 +2229,38 @@ def _build_translation_question_propositional(
         raise ValueError("actions_pool deve contenere almeno 1 azione")
 
     action = rng.choice(list(actions_pool))
-
     template_name = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
+    symbol_pool = ["P", "Q", "R"]
 
-    # Determine how many distinct symbol texts we need (2 for implication, 3 otherwise)
-    symbols_needed = 2 if template_name == "implication" else 3
+    # Usiamo solo i simboli effettivamente presenti nella frase generata.
+    atoms = rng.sample(symbol_pool, k=2 if template_name == "implication" else 3)
+    used_symbols = list(dict.fromkeys(atoms))
 
-    # Build possible distinct texts from names x actions
     possible_texts = [f"{name} {act}" for name in names_pool for act in actions_pool]
-
-    if len(possible_texts) >= symbols_needed:
-        # Choose distinct texts when possible to avoid duplicate hypotheses
-        chosen_texts = rng.sample(possible_texts, k=symbols_needed)
-        # Fill symbol_to_text mapping ensuring all symbols exist
-        all_symbols = ["P", "Q", "R"]
-        symbol_to_text = {}
-        for i, sym in enumerate(all_symbols):
-            if i < symbols_needed:
-                symbol_to_text[sym] = chosen_texts[i]
-            else:
-                # For unused extra symbols, pick a random (possibly duplicate) fallback
-                symbol_to_text[sym] = f"{rng.choice(list(names_pool))} {action}"
+    if len(possible_texts) >= len(used_symbols):
+        chosen_texts = rng.sample(possible_texts, k=len(used_symbols))
+        symbol_to_text = dict(zip(used_symbols, chosen_texts, strict=True))
     else:
-        # Not enough distinct combos available: fall back to previous behavior (allow repetitions)
+        # Quando non ci sono abbastanza combinazioni distinte, manteniamo il fallback.
         symbol_to_text = {
-            "P": f"{rng.choice(list(names_pool))} {action}",
-            "Q": f"{rng.choice(list(names_pool))} {action}",
-            "R": f"{rng.choice(list(names_pool))} {action}",
+            symbol: f"{rng.choice(list(names_pool))} {action}"
+            for symbol in used_symbols
         }
     if template_name == "implication":
-        atoms = _pick_symbol_sequence(
-            symbols=["P", "Q", "R"],
-            length=2,
-            rng=rng,
-            repetition_probability=FORMULA_REPETITION_PROBABILITY,
-        )
         left, right = atoms
         sentence = f"Se {symbol_to_text[left]} allora {symbol_to_text[right]}"
         correct_formula = f"imp({left},{right})"
     elif template_name == "conjunction_chain":
-        atoms = _pick_symbol_sequence(
-            symbols=["P", "Q", "R"],
-            length=3,
-            rng=rng,
-            repetition_probability=FORMULA_REPETITION_PROBABILITY,
-        )
         first, second, third = atoms
         sentence = f"{symbol_to_text[first]} e {symbol_to_text[second]} e {symbol_to_text[third]}"
         correct_formula = f"and(and({first},{second}),{third})"
     else:
-        atoms = _pick_symbol_sequence(
-            symbols=["P", "Q", "R"],
-            length=3,
-            rng=rng,
-            repetition_probability=FORMULA_REPETITION_PROBABILITY,
-        )
         first, second, third = atoms
         sentence = f"{symbol_to_text[first]} o {symbol_to_text[second]} o {symbol_to_text[third]}"
         correct_formula = f"or(or({first},{second}),{third})"
 
     question_text = f'Tradurre la seguente frase in linguaggio logico: "{sentence}"'
-    info = [f"{symbol} = {text}" for symbol, text in symbol_to_text.items()]
+    info = [f"{symbol} = {symbol_to_text[symbol]}" for symbol in used_symbols]
     wrong_formulas = _build_propositional_wrong_formulas(
         template_name=template_name,
         atoms=atoms,
