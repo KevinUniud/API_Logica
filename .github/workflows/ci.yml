@@ -31,5 +31,4 @@ jobs:
         run: python -m unittest test.py
 
       - name: Run API tests
-        working-directory: server
-        run: python -m unittest test_api.py
+        run: python -m unittest server.test_api

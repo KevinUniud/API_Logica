@@ -1551,42 +1551,147 @@ def _sample_partitioned_options(
     return None
 
 
-def _prefer_simpler_candidates(
-    candidates: Sequence[str],
-    *,
-    reference_formula: Any,
-    required_count: int,
-    rng: random.Random,
-) -> list[str]:
-    """Preferisce candidati piu semplici mantenendo comunque una quota di variabilita."""
-    unique_candidates = list(dict.fromkeys(candidates))
-    if len(unique_candidates) < required_count:
-        return unique_candidates
+def _formula_contains_not(expr: Any) -> bool:
+    """Verifica se la formula contiene almeno un operatore not."""
+    ast = _as_ast(expr)
 
-    reference_ast = _as_ast(reference_formula)
-    reference_size = formula_size(reference_ast)
-    reference_depth = formula_depth(reference_ast)
-
-    def is_simpler(candidate: str) -> bool:
-        candidate_ast = _as_ast(candidate)
-        candidate_size = formula_size(candidate_ast)
-        candidate_depth = formula_depth(candidate_ast)
-        if reference_size > 1 and candidate_size <= reference_size - 1 and candidate_depth <= reference_depth:
+    def walk(node: Any) -> bool:
+        if isinstance(node, Var):
+            return False
+        if isinstance(node, Not):
             return True
-        return candidate_size < reference_size or candidate_depth < reference_depth
+        if isinstance(node, (And, Or, Imp, Iff)):
+            return walk(node.left) or walk(node.right)
+        raise TypeError(f"Tipo formula non supportato: {type(node)!r}")
 
-    simpler_candidates = [candidate for candidate in unique_candidates if is_simpler(candidate)]
-    if len(simpler_candidates) >= required_count:
-        non_simpler_candidates = [candidate for candidate in unique_candidates if candidate not in simpler_candidates]
-        if not non_simpler_candidates:
-            return simpler_candidates
+    return walk(ast)
 
-        # Mantiene una piccola quota di candidati non-semplici per evitare set omogenei.
-        carry_over_count = min(len(non_simpler_candidates), max(1, required_count // 2))
-        carry_over = rng.sample(non_simpler_candidates, carry_over_count)
-        return simpler_candidates + carry_over
 
-    return unique_candidates
+def _logical_consequence_operator_bucket(formula: str) -> int | None:
+    """Restituisce il bucket operatori valido (1/2) per le opzioni di conseguenza logica."""
+    ast = _as_ast(formula)
+    operator_count = formula_operator_count(ast)
+    if operator_count not in (1, 2):
+        return None
+    # Vincolo richiesto: se compare not, serve almeno un altro operatore.
+    if operator_count == 1 and _formula_contains_not(ast):
+        return None
+    return operator_count
+
+
+def _select_logical_consequence_options(
+    *,
+    rng: random.Random,
+    consequence_candidates: Sequence[str],
+    non_consequence_candidates: Sequence[str],
+    correct_count: int,
+    wrong_count: int,
+    max_attempts: int = 24,
+) -> tuple[list[str], list[str]] | None:
+    """Seleziona opzioni rispettando il bilanciamento meta con 1 operatore e meta con 2."""
+    total_options = correct_count + wrong_count
+    if total_options % 2 != 0:
+        return None
+
+    target_one_operator = total_options // 2
+    target_two_operators = total_options // 2
+
+    consequence_by_bucket: dict[int, list[str]] = {1: [], 2: []}
+    non_consequence_by_bucket: dict[int, list[str]] = {1: [], 2: []}
+
+    for candidate in dict.fromkeys(consequence_candidates):
+        bucket = _logical_consequence_operator_bucket(candidate)
+        if bucket is not None:
+            consequence_by_bucket[bucket].append(candidate)
+
+    for candidate in dict.fromkeys(non_consequence_candidates):
+        bucket = _logical_consequence_operator_bucket(candidate)
+        if bucket is not None:
+            non_consequence_by_bucket[bucket].append(candidate)
+
+    all_correct_candidates = consequence_by_bucket[1] + consequence_by_bucket[2]
+    if not all_correct_candidates:
+        return None
+
+    for _ in range(max_attempts):
+        # Richiesta implementativa: genera prima una risposta corretta.
+        first_correct = rng.choice(all_correct_candidates)
+        first_bucket = _logical_consequence_operator_bucket(first_correct)
+        if first_bucket is None:
+            continue
+
+        needed_one = target_one_operator - (1 if first_bucket == 1 else 0)
+        needed_two = target_two_operators - (1 if first_bucket == 2 else 0)
+        if needed_one < 0 or needed_two < 0:
+            continue
+
+        remaining_correct = correct_count - 1
+        remaining_wrong = wrong_count
+
+        feasible_splits: list[tuple[int, int, int, int]] = []
+        min_correct_one = max(0, remaining_correct - needed_two)
+        max_correct_one = min(remaining_correct, needed_one)
+
+        for correct_one in range(min_correct_one, max_correct_one + 1):
+            correct_two = remaining_correct - correct_one
+            wrong_one = needed_one - correct_one
+            wrong_two = needed_two - correct_two
+            if wrong_one < 0 or wrong_two < 0:
+                continue
+            if wrong_one + wrong_two != remaining_wrong:
+                continue
+            feasible_splits.append((correct_one, correct_two, wrong_one, wrong_two))
+
+        rng.shuffle(feasible_splits)
+
+        for correct_one, correct_two, wrong_one, wrong_two in feasible_splits:
+            remaining_correct_one_pool = [
+                item for item in consequence_by_bucket[1] if item != first_correct
+            ]
+            remaining_correct_two_pool = [
+                item for item in consequence_by_bucket[2] if item != first_correct
+            ]
+
+            if len(remaining_correct_one_pool) < correct_one:
+                continue
+            if len(remaining_correct_two_pool) < correct_two:
+                continue
+            if len(non_consequence_by_bucket[1]) < wrong_one:
+                continue
+            if len(non_consequence_by_bucket[2]) < wrong_two:
+                continue
+
+            selected_correct = [first_correct]
+            selected_correct.extend(rng.sample(remaining_correct_one_pool, correct_one))
+            selected_correct.extend(rng.sample(remaining_correct_two_pool, correct_two))
+
+            selected_wrong = []
+            selected_wrong.extend(rng.sample(non_consequence_by_bucket[1], wrong_one))
+            selected_wrong.extend(rng.sample(non_consequence_by_bucket[2], wrong_two))
+
+            trial_options = selected_correct + selected_wrong
+            if len(set(trial_options)) != len(trial_options):
+                continue
+            if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
+                continue
+
+            return selected_correct, selected_wrong
+
+    return None
+
+
+def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
+    """Genera formule candidate a 1 operatore a partire da coppie di variabili."""
+    candidates: list[str] = []
+    for left in variables:
+        for right in variables:
+            if left == right:
+                continue
+            candidates.append(f"and({left},{right})")
+            candidates.append(f"or({left},{right})")
+            candidates.append(f"imp({left},{right})")
+            candidates.append(f"iff({left},{right})")
+    return list(dict.fromkeys(candidates))
 
 
 def build_tvq(
@@ -1738,6 +1843,10 @@ def build_logical_consequence_question(
     rng = random.Random(seed)
     remaining_timeout = _make_timeout_provider(timeout)
     required_options = correct_options_count + wrong_options_count
+    if required_options % 2 != 0:
+        raise ValueError(
+            "Il totale delle opzioni deve essere pari per distribuire meta risposte con 1 operatore e meta con 2"
+        )
     variables = _default_vars(variable_count)
     question_formula = generate_formula_by_variable_count(
         variable_count=variable_count,
@@ -1764,15 +1873,23 @@ def build_logical_consequence_question(
     if len(candidates) < required_options:
         raise RuntimeError("Non ci sono abbastanza formule candidate per il quiz di conseguenza logica")
 
-    candidates = [
-        candidate
-        for candidate in candidates
-        if formula_operator_count(_as_ast(candidate)) <= 2
-    ]
+    candidate_signatures = {_commutative_signature(candidate) for candidate in candidates}
+    for synthetic in _build_one_operator_candidates(variables):
+        if _has_adjacent_duplicate_atoms(synthetic):
+            continue
+        signature = _commutative_signature(synthetic)
+        if signature in candidate_signatures:
+            continue
+        if signature == _commutative_signature(question_prolog):
+            continue
+        candidates.append(synthetic)
+        candidate_signatures.add(signature)
+
+    candidates = [candidate for candidate in candidates if _logical_consequence_operator_bucket(candidate) is not None]
 
     if len(candidates) < required_options:
         raise RuntimeError(
-            "Non ci sono abbastanza formule candidate con al massimo 2 operatori per il quiz di conseguenza logica"
+            "Non ci sono abbastanza formule candidate con 1 o 2 operatori per il quiz di conseguenza logica"
         )
 
     implication_cache: dict[str, bool] = {}
@@ -1804,45 +1921,22 @@ def build_logical_consequence_question(
             consequence_candidates.append(candidate)
         else:
             non_consequence_candidates.append(candidate)
-        if (
-            len(consequence_candidates) >= correct_options_count
-            and len(non_consequence_candidates) >= wrong_options_count
-        ):
-            break
 
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
 
-    consequence_candidates = _prefer_simpler_candidates(
-        consequence_candidates,
-        reference_formula=question_prolog,
-        required_count=correct_options_count,
+    selected = _select_logical_consequence_options(
         rng=rng,
-    )
-    non_consequence_candidates = _prefer_simpler_candidates(
-        non_consequence_candidates,
-        reference_formula=question_prolog,
-        required_count=wrong_options_count,
-        rng=rng,
-    )
-
-    selected = _sample_partitioned_options(
-        rng=rng,
-        left_candidates=consequence_candidates,
-        right_candidates=non_consequence_candidates,
-        left_count=correct_options_count,
-        right_count=wrong_options_count,
-        uniqueness_key=_commutative_signature,
-        # Validazione semantica esplicita per evitare mismatch tra classificazione
-        # iniziale e set finale selezionato.
-        extra_validator=lambda selected_left, selected_right: (
-            all(is_logical_consequence(item) for item in selected_left)
-            and not any(is_logical_consequence(item) for item in selected_right)
-        ),
+        consequence_candidates=consequence_candidates,
+        non_consequence_candidates=non_consequence_candidates,
+        correct_count=correct_options_count,
+        wrong_count=wrong_options_count,
     )
 
     if selected is None:
-        raise RuntimeError("Impossibile rispettare i vincoli di diversita nel quiz di conseguenza logica")
+        raise RuntimeError(
+            "Impossibile rispettare i vincoli di conseguenza logica e bilanciamento operatori (meta 1, meta 2)"
+        )
 
     selected_correct, selected_wrong = selected
 

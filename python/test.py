@@ -16,7 +16,6 @@ from generator import _commutative_signature
 from generator import _formula_has_non_banal_repetitions
 from generator import _select_formulas_with_repetition_policy
 from generator import formula_operator_count
-from generator import formula_size
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
 
@@ -504,22 +503,22 @@ class GeneratorTests(unittest.TestCase):
                 if vars_tuple != ("p", "q", "r"):
                     return []
                 formulas = [
+                    "and(p,q)",
+                    "or(q,r)",
+                    "imp(p,q)",
                     "and(p,or(q,r))",
                     "or(p,and(q,r))",
                     "imp(and(p,q),r)",
                     "iff(and(p,q),r)",
-                    "and(p,and(q,r))",
                     "or(and(p,q),r)",
-                    "imp(p,or(q,r))",
-                    "iff(p,or(q,r))",
                 ]
                 return formulas[:limit]
 
             def implies_formula(self, left, right, vars_list=None, timeout=10):
                 implied = {
                     "imp(and(p,q),r)",
+                    "and(p,q)",
                     "or(and(p,q),r)",
-                    "imp(p,or(q,r))",
                 }
                 return right in implied
 
@@ -545,70 +544,84 @@ class GeneratorTests(unittest.TestCase):
                 for entry in question["options"]
             )
         )
+        operator_counts = [
+            formula_operator_count(from_prolog(entry["formula_prolog"]))
+            for entry in question["options"]
+        ]
+        self.assertEqual(operator_counts.count(1), 2)
+        self.assertEqual(operator_counts.count(2), 2)
+        self.assertTrue(all(entry["formula_prolog"] != "not(p)" for entry in question["options"]))
         option_heads = {entry["formula_prolog"].split("(", 1)[0] for entry in question["options"]}
         self.assertGreaterEqual(len(option_heads), 2)
 
     def test_logical_consequence_known_entailment_is_correct(self):
-        """Verifica il caso noto: and(p,q) |= p."""
+        """Verifica il caso noto: and(p,q) |= or(p,q)."""
 
         class KnownEntailmentBridge(FakeBridge):
             def some_depth(self, depth, variables, limit, timeout=10):
-                if tuple(variables) != ("p", "q"):
+                if tuple(variables) != ("p", "q", "r"):
                     return []
                 if depth == 2:
                     # Stabilizza la domanda generata dal builder.
                     return ["and(p,q)"]
                 formulas = [
-                    "p",
                     "or(p,q)",
-                    "not(p)",
-                    "iff(p,q)",
+                    "and(p,r)",
+                    "and(and(p,r),q)",
+                    "or(and(p,r),q)",
                 ]
                 return formulas[:limit]
 
             def implies_formula(self, left, right, vars_list=None, timeout=10):
                 if left != "and(p,q)":
                     return False
-                return right == "p"
+                return right == "or(p,q)"
 
-        question = build_logical_consequence_question(
-            variable_count=2,
-            correct_options_count=1,
-            wrong_options_count=3,
-            seed=13,
-            bridge=_bridge(KnownEntailmentBridge()),
-        )
+        with patch("generator.generate_formula_by_variable_count", return_value="and(p,q)"):
+            question = build_logical_consequence_question(
+                variable_count=3,
+                correct_options_count=1,
+                wrong_options_count=3,
+                seed=13,
+                bridge=_bridge(KnownEntailmentBridge()),
+            )
 
         self.assertEqual(
             _commutative_signature(question["question_prolog"]),
             _commutative_signature("and(p,q)"),
         )
         self.assertIn(
-            _commutative_signature("p"),
+            _commutative_signature("or(p,q)"),
             [
                 _commutative_signature(entry["formula_prolog"])
                 for entry in question["options"]
                 if entry["is_consequence"]
             ],
         )
+        operator_counts = [
+            formula_operator_count(from_prolog(entry["formula_prolog"]))
+            for entry in question["options"]
+        ]
+        self.assertEqual(operator_counts.count(1), 2)
+        self.assertEqual(operator_counts.count(2), 2)
 
-    def test_logical_consequence_prefers_simpler_options_when_available(self):
-        """Verifica che il quiz privilegi opzioni piu semplici quando ce ne sono abbastanza."""
+    def test_logical_consequence_balances_one_and_two_operator_options(self):
+        """Verifica che il quiz bilanci opzioni con 1 operatore e 2 operatori."""
 
-        class PreferSimplerBridge(FakeBridge):
+        class BalancedOperatorBridge(FakeBridge):
             def some_depth(self, depth, variables, limit, timeout=10):
                 if tuple(variables) != ("p", "q", "r"):
                     return []
                 formulas = [
+                    "and(p,q)",
                     "imp(and(p,q),r)",
-                    "iff(and(p,q),r)",
-                    "or(and(p,q),r)",
-                    "and(and(p,q),r)",
+                    "and(p,r)",
+                    "or(and(p,r),q)",
                 ]
                 return formulas[:limit]
 
             def implies_formula(self, left, right, vars_list=None, timeout=10):
-                return right == "imp(and(p,q),r)"
+                return right in {"and(p,q)", "imp(and(p,q),r)"}
 
         with patch("generator.generate_formula_by_variable_count", return_value="imp(and(p,q),or(r,p))"):
             question = build_logical_consequence_question(
@@ -616,53 +629,56 @@ class GeneratorTests(unittest.TestCase):
                 correct_options_count=1,
                 wrong_options_count=1,
                 seed=29,
-                bridge=_bridge(PreferSimplerBridge()),
+                bridge=_bridge(BalancedOperatorBridge()),
             )
 
-        reference_size = formula_size(from_prolog(question["question_prolog"]))
-        selected_formulas = [entry["formula_prolog"] for entry in question["options"]]
-        correct_formulas = [entry["formula_prolog"] for entry in question["options"] if entry["is_consequence"]]
-        self.assertEqual(correct_formulas, ["imp(and(p,q),r)"])
-        self.assertTrue(
-            all(formula_size(from_prolog(formula)) < reference_size for formula in selected_formulas)
-        )
+        operator_counts = [
+            formula_operator_count(from_prolog(entry["formula_prolog"]))
+            for entry in question["options"]
+        ]
+        self.assertEqual(operator_counts.count(1), 1)
+        self.assertEqual(operator_counts.count(2), 1)
 
     def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
         """Verifica che una conseguenza piu semplice sia ammessa, ma non le varianti duplicate per commutazione."""
 
         class SimpleConsequenceBridge(FakeBridge):
             def some_depth(self, depth, variables, limit, timeout=10):
-                if tuple(variables) != ("p", "q"):
+                if tuple(variables) != ("p", "q", "r"):
                     return []
                 if depth == 2:
                     return ["and(p,q)"]
                 formulas = [
-                    "p",
-                    "q",
-                    "and(q,p)",
                     "or(p,q)",
+                    "and(q,p)",
+                    "or(and(p,r),q)",
                 ]
                 return formulas[:limit]
 
             def implies_formula(self, left, right, vars_list=None, timeout=10):
-                # `and(p,q) |= p` è valido, mentre la variante commutativa della domanda va scartata.
-                return right == "p"
+                # `and(p,q) |= or(p,q)` è valido, mentre la variante commutativa della domanda va scartata.
+                return right == "or(p,q)"
 
-        question = build_logical_consequence_question(
-            variable_count=2,
-            correct_options_count=1,
-            wrong_options_count=1,
-            seed=19,
-            bridge=_bridge(SimpleConsequenceBridge()),
-        )
+        with patch("generator.generate_formula_by_variable_count", return_value="and(p,q)"):
+            question = build_logical_consequence_question(
+                variable_count=3,
+                correct_options_count=1,
+                wrong_options_count=1,
+                seed=19,
+                bridge=_bridge(SimpleConsequenceBridge()),
+            )
 
         self.assertEqual(
             _commutative_signature(question["question_prolog"]),
             _commutative_signature("and(p,q)"),
         )
         self.assertEqual(
-            [entry["formula_prolog"] for entry in question["options"] if entry["is_consequence"]],
-            ["p"],
+            [
+                _commutative_signature(entry["formula_prolog"])
+                for entry in question["options"]
+                if entry["is_consequence"]
+            ],
+            [_commutative_signature("or(p,q)")],
         )
         self.assertNotIn("and(q,p)", [entry["formula_prolog"] for entry in question["options"]])
 
@@ -671,27 +687,28 @@ class GeneratorTests(unittest.TestCase):
 
         class DuplicateAtomOptionBridge(FakeBridge):
             def some_depth(self, depth, variables, limit, timeout=10):
-                if tuple(variables) != ("p", "q"):
+                if tuple(variables) != ("p", "q", "r"):
                     return []
                 if depth == 2:
                     return ["and(p,q)"]
                 formulas = [
-                    "p",
                     "or(p,q)",
                     "and(q,q)",
+                    "or(and(p,r),q)",
                 ]
                 return formulas[:limit]
 
             def implies_formula(self, left, right, vars_list=None, timeout=10):
-                return right == "p"
+                return right == "or(p,q)"
 
-        question = build_logical_consequence_question(
-            variable_count=2,
-            correct_options_count=1,
-            wrong_options_count=1,
-            seed=23,
-            bridge=_bridge(DuplicateAtomOptionBridge()),
-        )
+        with patch("generator.generate_formula_by_variable_count", return_value="and(p,q)"):
+            question = build_logical_consequence_question(
+                variable_count=3,
+                correct_options_count=1,
+                wrong_options_count=1,
+                seed=23,
+                bridge=_bridge(DuplicateAtomOptionBridge()),
+            )
 
         formulas = [entry["formula_prolog"] for entry in question["options"]]
         self.assertNotIn("and(q,q)", formulas)
@@ -1484,7 +1501,7 @@ class GeneratorTests(unittest.TestCase):
         )
 
         infos = result["info"]
-        self.assertEqual(len(set(infos)), 3)
+        self.assertEqual(len(set(infos)), len(infos))
         phrase = result["question_text"].split('"', 2)[1]
         for entry in infos:
             hypothesis_text = entry.split(" = ", 1)[1]
