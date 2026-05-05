@@ -1597,57 +1597,86 @@ def _select_logical_consequence_options(
     correct_count: int,
     wrong_count: int,
 ) -> tuple[list[str], list[str]] | None:
-    """Seleziona opzioni garantendo una risposta speciale atomica o negata, poi completa il resto."""
+    """Seleziona opzioni garantendo almeno una risposta a 2 operatori e, quando possibile, una speciale."""
     special_correct_candidates = [
         candidate for candidate in dict.fromkeys(consequence_candidates) if _logical_consequence_special_bucket(candidate) is not None
     ]
     special_wrong_candidates = [
         candidate for candidate in dict.fromkeys(non_consequence_candidates) if _logical_consequence_special_bucket(candidate) is not None
     ]
-
+    two_correct_candidates = [
+        candidate for candidate in dict.fromkeys(consequence_candidates) if _logical_consequence_operator_bucket(candidate) == 2
+    ]
+    two_wrong_candidates = [
+        candidate for candidate in dict.fromkeys(non_consequence_candidates) if _logical_consequence_operator_bucket(candidate) == 2
+    ]
     regular_correct_candidates = [
-        candidate for candidate in dict.fromkeys(consequence_candidates) if _logical_consequence_special_bucket(candidate) is None
+        candidate
+        for candidate in dict.fromkeys(consequence_candidates)
+        if _logical_consequence_special_bucket(candidate) is None and _logical_consequence_operator_bucket(candidate) != 2
     ]
     regular_wrong_candidates = [
-        candidate for candidate in dict.fromkeys(non_consequence_candidates) if _logical_consequence_special_bucket(candidate) is None
+        candidate
+        for candidate in dict.fromkeys(non_consequence_candidates)
+        if _logical_consequence_special_bucket(candidate) is None and _logical_consequence_operator_bucket(candidate) != 2
     ]
 
-    feasible_specials: list[tuple[str, bool, int, int]] = []
-    for candidate in special_correct_candidates:
-        remaining_correct = correct_count - 1
-        remaining_wrong = wrong_count
-        if remaining_correct >= 0 and len(regular_correct_candidates) >= remaining_correct and len(regular_wrong_candidates) >= remaining_wrong:
-            feasible_specials.append((candidate, True, remaining_correct, remaining_wrong))
+    special_candidates: list[tuple[str, bool]] = [(candidate, True) for candidate in special_correct_candidates]
+    special_candidates.extend((candidate, False) for candidate in special_wrong_candidates)
+    two_candidates: list[tuple[str, bool]] = [(candidate, True) for candidate in two_correct_candidates]
+    two_candidates.extend((candidate, False) for candidate in two_wrong_candidates)
 
-    for candidate in special_wrong_candidates:
-        remaining_correct = correct_count
-        remaining_wrong = wrong_count - 1
-        if remaining_wrong >= 0 and len(regular_correct_candidates) >= remaining_correct and len(regular_wrong_candidates) >= remaining_wrong:
-            feasible_specials.append((candidate, False, remaining_correct, remaining_wrong))
+    # Prima prova combinazioni con una risposta speciale atomica/negata e una risposta a 2 operatori.
+    candidate_pairs: list[tuple[tuple[str, bool] | None, tuple[str, bool]]] = []
+    candidate_pairs.extend((special, two) for special in special_candidates for two in two_candidates)
+    # Se non basta, prova comunque a garantire almeno una risposta a 2 operatori.
+    candidate_pairs.extend((None, two) for two in two_candidates)
 
-    if not feasible_specials:
-        return None
+    for special_choice, two_choice in candidate_pairs:
+        selected_correct: list[str] = []
+        selected_wrong: list[str] = []
+        used: set[str] = set()
 
-    special_candidate, is_correct, remaining_correct, remaining_wrong = rng.choice(feasible_specials)
-    selected_correct = [special_candidate] if is_correct else []
-    selected_wrong = [special_candidate] if not is_correct else []
+        if special_choice is not None:
+            special_candidate, is_special_correct = special_choice
+            if is_special_correct:
+                selected_correct.append(special_candidate)
+            else:
+                selected_wrong.append(special_candidate)
+            used.add(special_candidate)
 
-    remaining_correct_pool = [candidate for candidate in regular_correct_candidates if candidate != special_candidate]
-    remaining_wrong_pool = [candidate for candidate in regular_wrong_candidates if candidate != special_candidate]
+        two_candidate, is_two_correct = two_choice
+        if two_candidate in used:
+            continue
+        if is_two_correct:
+            selected_correct.append(two_candidate)
+        else:
+            selected_wrong.append(two_candidate)
+        used.add(two_candidate)
 
-    if len(remaining_correct_pool) < remaining_correct or len(remaining_wrong_pool) < remaining_wrong:
-        return None
+        remaining_correct = correct_count - len(selected_correct)
+        remaining_wrong = wrong_count - len(selected_wrong)
+        if remaining_correct < 0 or remaining_wrong < 0:
+            continue
 
-    selected_correct.extend(rng.sample(remaining_correct_pool, remaining_correct))
-    selected_wrong.extend(rng.sample(remaining_wrong_pool, remaining_wrong))
+        remaining_correct_pool = [candidate for candidate in regular_correct_candidates if candidate not in used]
+        remaining_wrong_pool = [candidate for candidate in regular_wrong_candidates if candidate not in used]
 
-    trial_options = selected_correct + selected_wrong
-    if len(set(trial_options)) != len(trial_options):
-        return None
-    if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
-        return None
+        if len(remaining_correct_pool) < remaining_correct or len(remaining_wrong_pool) < remaining_wrong:
+            continue
 
-    return selected_correct, selected_wrong
+        selected_correct.extend(rng.sample(remaining_correct_pool, remaining_correct))
+        selected_wrong.extend(rng.sample(remaining_wrong_pool, remaining_wrong))
+
+        trial_options = selected_correct + selected_wrong
+        if len(set(trial_options)) != len(trial_options):
+            continue
+        if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
+            continue
+
+        return selected_correct, selected_wrong
+
+    return None
 
 
 def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
@@ -1661,6 +1690,26 @@ def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
             candidates.append(f"or({left},{right})")
             candidates.append(f"imp({left},{right})")
             candidates.append(f"iff({left},{right})")
+    return list(dict.fromkeys(candidates))
+
+
+def _build_two_operator_candidates(variables: Sequence[str]) -> list[str]:
+    """Genera formule candidate con esattamente due operatori."""
+    candidates: list[str] = []
+    for left in variables:
+        candidates.append(f"not(not({left}))")
+        for middle in variables:
+            for right in variables:
+                if left == middle or middle == right or left == right:
+                    continue
+                candidates.extend(
+                    [
+                        f"and({left},or({middle},{right}))",
+                        f"or({left},and({middle},{right}))",
+                        f"imp({left},and({middle},{right}))",
+                        f"iff({left},or({middle},{right}))",
+                    ]
+                )
     return list(dict.fromkeys(candidates))
 
 
@@ -1898,6 +1947,17 @@ def build_logical_consequence_question(
         candidate_signatures.add(signature)
 
     for synthetic in _build_special_logical_consequence_candidates(variables):
+        signature = _commutative_signature(synthetic)
+        if signature in candidate_signatures:
+            continue
+        if signature == _commutative_signature(question_prolog):
+            continue
+        candidates.append(synthetic)
+        candidate_signatures.add(signature)
+
+    for synthetic in _build_two_operator_candidates(variables):
+        if _has_adjacent_duplicate_atoms(synthetic):
+            continue
         signature = _commutative_signature(synthetic)
         if signature in candidate_signatures:
             continue
