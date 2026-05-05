@@ -1596,98 +1596,58 @@ def _select_logical_consequence_options(
     non_consequence_candidates: Sequence[str],
     correct_count: int,
     wrong_count: int,
-    max_attempts: int = 24,
 ) -> tuple[list[str], list[str]] | None:
-    """Seleziona opzioni rispettando il bilanciamento meta con 1 operatore e meta con 2."""
-    total_options = correct_count + wrong_count
-    if total_options % 2 != 0:
-        return None
+    """Seleziona opzioni garantendo una risposta speciale atomica o negata, poi completa il resto."""
+    special_correct_candidates = [
+        candidate for candidate in dict.fromkeys(consequence_candidates) if _logical_consequence_special_bucket(candidate) is not None
+    ]
+    special_wrong_candidates = [
+        candidate for candidate in dict.fromkeys(non_consequence_candidates) if _logical_consequence_special_bucket(candidate) is not None
+    ]
 
-    target_one_operator = total_options // 2
-    target_two_operators = total_options // 2
+    regular_correct_candidates = [
+        candidate for candidate in dict.fromkeys(consequence_candidates) if _logical_consequence_special_bucket(candidate) is None
+    ]
+    regular_wrong_candidates = [
+        candidate for candidate in dict.fromkeys(non_consequence_candidates) if _logical_consequence_special_bucket(candidate) is None
+    ]
 
-    consequence_by_bucket: dict[int, list[str]] = {1: [], 2: []}
-    non_consequence_by_bucket: dict[int, list[str]] = {1: [], 2: []}
-
-    for candidate in dict.fromkeys(consequence_candidates):
-        bucket = _logical_consequence_operator_bucket(candidate)
-        if bucket is not None:
-            consequence_by_bucket[bucket].append(candidate)
-
-    for candidate in dict.fromkeys(non_consequence_candidates):
-        bucket = _logical_consequence_operator_bucket(candidate)
-        if bucket is not None:
-            non_consequence_by_bucket[bucket].append(candidate)
-
-    all_correct_candidates = consequence_by_bucket[1] + consequence_by_bucket[2]
-    if not all_correct_candidates:
-        return None
-
-    for _ in range(max_attempts):
-        # Richiesta implementativa: genera prima una risposta corretta.
-        first_correct = rng.choice(all_correct_candidates)
-        first_bucket = _logical_consequence_operator_bucket(first_correct)
-        if first_bucket is None:
-            continue
-
-        needed_one = target_one_operator - (1 if first_bucket == 1 else 0)
-        needed_two = target_two_operators - (1 if first_bucket == 2 else 0)
-        if needed_one < 0 or needed_two < 0:
-            continue
-
+    feasible_specials: list[tuple[str, bool, int, int]] = []
+    for candidate in special_correct_candidates:
         remaining_correct = correct_count - 1
         remaining_wrong = wrong_count
+        if remaining_correct >= 0 and len(regular_correct_candidates) >= remaining_correct and len(regular_wrong_candidates) >= remaining_wrong:
+            feasible_specials.append((candidate, True, remaining_correct, remaining_wrong))
 
-        feasible_splits: list[tuple[int, int, int, int]] = []
-        min_correct_one = max(0, remaining_correct - needed_two)
-        max_correct_one = min(remaining_correct, needed_one)
+    for candidate in special_wrong_candidates:
+        remaining_correct = correct_count
+        remaining_wrong = wrong_count - 1
+        if remaining_wrong >= 0 and len(regular_correct_candidates) >= remaining_correct and len(regular_wrong_candidates) >= remaining_wrong:
+            feasible_specials.append((candidate, False, remaining_correct, remaining_wrong))
 
-        for correct_one in range(min_correct_one, max_correct_one + 1):
-            correct_two = remaining_correct - correct_one
-            wrong_one = needed_one - correct_one
-            wrong_two = needed_two - correct_two
-            if wrong_one < 0 or wrong_two < 0:
-                continue
-            if wrong_one + wrong_two != remaining_wrong:
-                continue
-            feasible_splits.append((correct_one, correct_two, wrong_one, wrong_two))
+    if not feasible_specials:
+        return None
 
-        rng.shuffle(feasible_splits)
+    special_candidate, is_correct, remaining_correct, remaining_wrong = rng.choice(feasible_specials)
+    selected_correct = [special_candidate] if is_correct else []
+    selected_wrong = [special_candidate] if not is_correct else []
 
-        for correct_one, correct_two, wrong_one, wrong_two in feasible_splits:
-            remaining_correct_one_pool = [
-                item for item in consequence_by_bucket[1] if item != first_correct
-            ]
-            remaining_correct_two_pool = [
-                item for item in consequence_by_bucket[2] if item != first_correct
-            ]
+    remaining_correct_pool = [candidate for candidate in regular_correct_candidates if candidate != special_candidate]
+    remaining_wrong_pool = [candidate for candidate in regular_wrong_candidates if candidate != special_candidate]
 
-            if len(remaining_correct_one_pool) < correct_one:
-                continue
-            if len(remaining_correct_two_pool) < correct_two:
-                continue
-            if len(non_consequence_by_bucket[1]) < wrong_one:
-                continue
-            if len(non_consequence_by_bucket[2]) < wrong_two:
-                continue
+    if len(remaining_correct_pool) < remaining_correct or len(remaining_wrong_pool) < remaining_wrong:
+        return None
 
-            selected_correct = [first_correct]
-            selected_correct.extend(rng.sample(remaining_correct_one_pool, correct_one))
-            selected_correct.extend(rng.sample(remaining_correct_two_pool, correct_two))
+    selected_correct.extend(rng.sample(remaining_correct_pool, remaining_correct))
+    selected_wrong.extend(rng.sample(remaining_wrong_pool, remaining_wrong))
 
-            selected_wrong = []
-            selected_wrong.extend(rng.sample(non_consequence_by_bucket[1], wrong_one))
-            selected_wrong.extend(rng.sample(non_consequence_by_bucket[2], wrong_two))
+    trial_options = selected_correct + selected_wrong
+    if len(set(trial_options)) != len(trial_options):
+        return None
+    if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
+        return None
 
-            trial_options = selected_correct + selected_wrong
-            if len(set(trial_options)) != len(trial_options):
-                continue
-            if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
-                continue
-
-            return selected_correct, selected_wrong
-
-    return None
+    return selected_correct, selected_wrong
 
 
 def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
@@ -1701,6 +1661,15 @@ def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
             candidates.append(f"or({left},{right})")
             candidates.append(f"imp({left},{right})")
             candidates.append(f"iff({left},{right})")
+    return list(dict.fromkeys(candidates))
+
+
+def _build_special_logical_consequence_candidates(variables: Sequence[str]) -> list[str]:
+    """Genera candidati speciali atomici o negati a partire dalle variabili disponibili."""
+    candidates: list[str] = []
+    for variable in variables:
+        candidates.append(variable)
+        candidates.append(f"not({variable})")
     return list(dict.fromkeys(candidates))
 
 
@@ -1928,6 +1897,15 @@ def build_logical_consequence_question(
         candidates.append(synthetic)
         candidate_signatures.add(signature)
 
+    for synthetic in _build_special_logical_consequence_candidates(variables):
+        signature = _commutative_signature(synthetic)
+        if signature in candidate_signatures:
+            continue
+        if signature == _commutative_signature(question_prolog):
+            continue
+        candidates.append(synthetic)
+        candidate_signatures.add(signature)
+
     candidates = [
         candidate
         for candidate in candidates
@@ -1961,8 +1939,6 @@ def build_logical_consequence_question(
 
     consequence_candidates: list[str] = []
     non_consequence_candidates: list[str] = []
-    special_correct_candidates: list[str] = []
-    special_wrong_candidates: list[str] = []
 
     shuffled_candidates = list(candidates)
     rng.shuffle(shuffled_candidates)
@@ -1971,12 +1947,6 @@ def build_logical_consequence_question(
             consequence_candidates.append(candidate)
         else:
             non_consequence_candidates.append(candidate)
-
-        if _logical_consequence_special_bucket(candidate) is not None:
-            if is_logical_consequence(candidate):
-                special_correct_candidates.append(candidate)
-            else:
-                special_wrong_candidates.append(candidate)
 
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
@@ -1991,18 +1961,10 @@ def build_logical_consequence_question(
 
     if selected is None:
         raise RuntimeError(
-            "Impossibile rispettare i vincoli di conseguenza logica e bilanciamento operatori (meta 1, meta 2)"
+            "Impossibile rispettare i vincoli di conseguenza logica e garantire una risposta atomica o negata"
         )
 
     selected_correct, selected_wrong = selected
-
-    selected_correct, selected_wrong = _inject_special_logical_consequence_option(
-        rng=rng,
-        selected_correct=selected_correct,
-        selected_wrong=selected_wrong,
-        special_correct_candidates=special_correct_candidates,
-        special_wrong_candidates=special_wrong_candidates,
-    )
 
     if len({_commutative_signature(option) for option in selected_correct + selected_wrong}) != len(
         selected_correct + selected_wrong
