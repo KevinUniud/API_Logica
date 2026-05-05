@@ -1556,8 +1556,9 @@ def _prefer_simpler_candidates(
     *,
     reference_formula: Any,
     required_count: int,
+    rng: random.Random,
 ) -> list[str]:
-    """Riduce il pool ai candidati un po' piu semplici quando il set lo consente."""
+    """Preferisce candidati piu semplici mantenendo comunque una quota di variabilita."""
     unique_candidates = list(dict.fromkeys(candidates))
     if len(unique_candidates) < required_count:
         return unique_candidates
@@ -1576,7 +1577,14 @@ def _prefer_simpler_candidates(
 
     simpler_candidates = [candidate for candidate in unique_candidates if is_simpler(candidate)]
     if len(simpler_candidates) >= required_count:
-        return simpler_candidates
+        non_simpler_candidates = [candidate for candidate in unique_candidates if candidate not in simpler_candidates]
+        if not non_simpler_candidates:
+            return simpler_candidates
+
+        # Mantiene una piccola quota di candidati non-semplici per evitare set omogenei.
+        carry_over_count = min(len(non_simpler_candidates), max(1, required_count // 2))
+        carry_over = rng.sample(non_simpler_candidates, carry_over_count)
+        return simpler_candidates + carry_over
 
     return unique_candidates
 
@@ -1809,11 +1817,13 @@ def build_logical_consequence_question(
         consequence_candidates,
         reference_formula=question_prolog,
         required_count=correct_options_count,
+        rng=rng,
     )
     non_consequence_candidates = _prefer_simpler_candidates(
         non_consequence_candidates,
         reference_formula=question_prolog,
         required_count=wrong_options_count,
+        rng=rng,
     )
 
     selected = _sample_partitioned_options(
