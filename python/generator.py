@@ -587,6 +587,17 @@ def formula_atom_count(expr) -> int:
     raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
 
 
+def formula_operator_count(expr) -> int:
+    """Conta il numero totale di operatori logici presenti nella formula."""
+    if hasattr(expr, "name") and not hasattr(expr, "expr") and not hasattr(expr, "left"):
+        return 0
+    if hasattr(expr, "expr"):
+        return 1 + formula_operator_count(expr.expr)
+    if hasattr(expr, "left") and hasattr(expr, "right"):
+        return 1 + formula_operator_count(expr.left) + formula_operator_count(expr.right)
+    raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
+
+
 def _formula_atom_repetition_count(expr) -> int:
     """Conta quante occorrenze ripetute di atomi sono presenti nella formula."""
     atom_counts: Counter[str] = Counter()
@@ -1744,6 +1755,17 @@ def build_logical_consequence_question(
 
     if len(candidates) < required_options:
         raise RuntimeError("Non ci sono abbastanza formule candidate per il quiz di conseguenza logica")
+
+    candidates = [
+        candidate
+        for candidate in candidates
+        if formula_operator_count(_as_ast(candidate)) <= 2
+    ]
+
+    if len(candidates) < required_options:
+        raise RuntimeError(
+            "Non ci sono abbastanza formule candidate con al massimo 2 operatori per il quiz di conseguenza logica"
+        )
 
     implication_cache: dict[str, bool] = {}
 
