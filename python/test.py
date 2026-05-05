@@ -62,6 +62,12 @@ def _count_atom_repetitions(prolog_formula: str) -> int:
     return sum(count - 1 for count in counts.values() if count > 1)
 
 
+def _is_atom_or_negated_atom(prolog_formula: str) -> bool:
+    """Verifica se una formula e un atomo oppure la sua negazione semplice."""
+    ast = from_prolog(prolog_formula)
+    return isinstance(ast, Var) or (isinstance(ast, Not) and isinstance(ast.expr, Var))
+
+
 class FakeBridge:
     def __init__(self):
         """Inizializza lo stato del double di test."""
@@ -544,13 +550,7 @@ class GeneratorTests(unittest.TestCase):
                 for entry in question["options"]
             )
         )
-        operator_counts = [
-            formula_operator_count(from_prolog(entry["formula_prolog"]))
-            for entry in question["options"]
-        ]
-        self.assertEqual(operator_counts.count(1), 2)
-        self.assertEqual(operator_counts.count(2), 2)
-        self.assertTrue(all(entry["formula_prolog"] != "not(p)" for entry in question["options"]))
+        self.assertTrue(any(_is_atom_or_negated_atom(entry["formula_prolog"]) for entry in question["options"]))
         option_heads = {entry["formula_prolog"].split("(", 1)[0] for entry in question["options"]}
         self.assertGreaterEqual(len(option_heads), 2)
 
@@ -598,12 +598,7 @@ class GeneratorTests(unittest.TestCase):
                 if entry["is_consequence"]
             ],
         )
-        operator_counts = [
-            formula_operator_count(from_prolog(entry["formula_prolog"]))
-            for entry in question["options"]
-        ]
-        self.assertEqual(operator_counts.count(1), 2)
-        self.assertEqual(operator_counts.count(2), 2)
+        self.assertTrue(any(_is_atom_or_negated_atom(entry["formula_prolog"]) for entry in question["options"]))
 
     def test_logical_consequence_balances_one_and_two_operator_options(self):
         """Verifica che il quiz bilanci opzioni con 1 operatore e 2 operatori."""
@@ -632,12 +627,16 @@ class GeneratorTests(unittest.TestCase):
                 bridge=_bridge(BalancedOperatorBridge()),
             )
 
-        operator_counts = [
-            formula_operator_count(from_prolog(entry["formula_prolog"]))
-            for entry in question["options"]
-        ]
-        self.assertEqual(operator_counts.count(1), 1)
-        self.assertEqual(operator_counts.count(2), 1)
+        self.assertTrue(any(_is_atom_or_negated_atom(entry["formula_prolog"]) for entry in question["options"]))
+        self.assertEqual(
+            sum(
+                1
+                for entry in question["options"]
+                if not _is_atom_or_negated_atom(entry["formula_prolog"])
+                and formula_operator_count(from_prolog(entry["formula_prolog"])) in (1, 2)
+            ),
+            1,
+        )
 
     def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
         """Verifica che una conseguenza piu semplice sia ammessa, ma non le varianti duplicate per commutazione."""

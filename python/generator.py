@@ -1579,6 +1579,16 @@ def _logical_consequence_operator_bucket(formula: str) -> int | None:
     return operator_count
 
 
+def _logical_consequence_special_bucket(formula: str) -> int | None:
+    """Restituisce il bucket speciale per atomi o atomi negati semplici."""
+    ast = _as_ast(formula)
+    if isinstance(ast, Var):
+        return 0
+    if isinstance(ast, Not) and isinstance(ast.expr, Var):
+        return 1
+    return None
+
+
 def _select_logical_consequence_options(
     *,
     rng: random.Random,
@@ -1692,6 +1702,39 @@ def _build_one_operator_candidates(variables: Sequence[str]) -> list[str]:
             candidates.append(f"imp({left},{right})")
             candidates.append(f"iff({left},{right})")
     return list(dict.fromkeys(candidates))
+
+
+def _inject_special_logical_consequence_option(
+    *,
+    rng: random.Random,
+    selected_correct: list[str],
+    selected_wrong: list[str],
+    special_correct_candidates: Sequence[str],
+    special_wrong_candidates: Sequence[str],
+) -> tuple[list[str], list[str]]:
+    """Sostituisce una risposta selezionata con un atomo o atomo negato semplice."""
+    special_pool: list[tuple[str, bool]] = []
+    special_pool.extend((candidate, True) for candidate in dict.fromkeys(special_correct_candidates))
+    special_pool.extend((candidate, False) for candidate in dict.fromkeys(special_wrong_candidates))
+
+    if not special_pool:
+        raise RuntimeError("Impossibile trovare una risposta speciale atomica o negata")
+
+    special_candidate, is_correct = rng.choice(special_pool)
+    if is_correct:
+        if not selected_correct:
+            raise RuntimeError("Impossibile sostituire una risposta corretta con una risposta speciale")
+        replace_index = rng.randrange(len(selected_correct))
+        selected_correct = list(selected_correct)
+        selected_correct[replace_index] = special_candidate
+        return selected_correct, list(selected_wrong)
+
+    if not selected_wrong:
+        raise RuntimeError("Impossibile sostituire una risposta errata con una risposta speciale")
+    replace_index = rng.randrange(len(selected_wrong))
+    selected_wrong = list(selected_wrong)
+    selected_wrong[replace_index] = special_candidate
+    return list(selected_correct), selected_wrong
 
 
 def build_tvq(
@@ -1885,7 +1928,12 @@ def build_logical_consequence_question(
         candidates.append(synthetic)
         candidate_signatures.add(signature)
 
-    candidates = [candidate for candidate in candidates if _logical_consequence_operator_bucket(candidate) is not None]
+    candidates = [
+        candidate
+        for candidate in candidates
+        if _logical_consequence_operator_bucket(candidate) is not None
+        or _logical_consequence_special_bucket(candidate) is not None
+    ]
 
     if len(candidates) < required_options:
         raise RuntimeError(
@@ -1913,6 +1961,8 @@ def build_logical_consequence_question(
 
     consequence_candidates: list[str] = []
     non_consequence_candidates: list[str] = []
+    special_correct_candidates: list[str] = []
+    special_wrong_candidates: list[str] = []
 
     shuffled_candidates = list(candidates)
     rng.shuffle(shuffled_candidates)
@@ -1921,6 +1971,12 @@ def build_logical_consequence_question(
             consequence_candidates.append(candidate)
         else:
             non_consequence_candidates.append(candidate)
+
+        if _logical_consequence_special_bucket(candidate) is not None:
+            if is_logical_consequence(candidate):
+                special_correct_candidates.append(candidate)
+            else:
+                special_wrong_candidates.append(candidate)
 
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
@@ -1939,6 +1995,14 @@ def build_logical_consequence_question(
         )
 
     selected_correct, selected_wrong = selected
+
+    selected_correct, selected_wrong = _inject_special_logical_consequence_option(
+        rng=rng,
+        selected_correct=selected_correct,
+        selected_wrong=selected_wrong,
+        special_correct_candidates=special_correct_candidates,
+        special_wrong_candidates=special_wrong_candidates,
+    )
 
     if len({_commutative_signature(option) for option in selected_correct + selected_wrong}) != len(
         selected_correct + selected_wrong
