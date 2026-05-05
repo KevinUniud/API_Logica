@@ -1540,6 +1540,36 @@ def _sample_partitioned_options(
     return None
 
 
+def _prefer_simpler_candidates(
+    candidates: Sequence[str],
+    *,
+    reference_formula: Any,
+    required_count: int,
+) -> list[str]:
+    """Riduce il pool ai candidati un po' piu semplici quando il set lo consente."""
+    unique_candidates = list(dict.fromkeys(candidates))
+    if len(unique_candidates) < required_count:
+        return unique_candidates
+
+    reference_ast = _as_ast(reference_formula)
+    reference_size = formula_size(reference_ast)
+    reference_depth = formula_depth(reference_ast)
+
+    def is_simpler(candidate: str) -> bool:
+        candidate_ast = _as_ast(candidate)
+        candidate_size = formula_size(candidate_ast)
+        candidate_depth = formula_depth(candidate_ast)
+        if reference_size > 1 and candidate_size <= reference_size - 1 and candidate_depth <= reference_depth:
+            return True
+        return candidate_size < reference_size or candidate_depth < reference_depth
+
+    simpler_candidates = [candidate for candidate in unique_candidates if is_simpler(candidate)]
+    if len(simpler_candidates) >= required_count:
+        return simpler_candidates
+
+    return unique_candidates
+
+
 def build_tvq(
     predicate_count: int,
     true_options_count: int,
@@ -1752,6 +1782,17 @@ def build_logical_consequence_question(
 
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
+
+    consequence_candidates = _prefer_simpler_candidates(
+        consequence_candidates,
+        reference_formula=question_prolog,
+        required_count=correct_options_count,
+    )
+    non_consequence_candidates = _prefer_simpler_candidates(
+        non_consequence_candidates,
+        reference_formula=question_prolog,
+        required_count=wrong_options_count,
+    )
 
     selected = _sample_partitioned_options(
         rng=rng,

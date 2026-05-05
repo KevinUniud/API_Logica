@@ -15,6 +15,7 @@ from generator import generate_formula
 from generator import _commutative_signature
 from generator import _formula_has_non_banal_repetitions
 from generator import _select_formulas_with_repetition_policy
+from generator import formula_size
 from prolog_bridge import PrologBridge
 from prolog_bridge import collect_variables, from_prolog
 
@@ -582,6 +583,39 @@ class GeneratorTests(unittest.TestCase):
                 for entry in question["options"]
                 if entry["is_consequence"]
             ],
+        )
+
+    def test_logical_consequence_prefers_simpler_options_when_available(self):
+        """Verifica che il quiz privilegi opzioni piu semplici quando ce ne sono abbastanza."""
+
+        class PreferSimplerBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                formulas = [
+                    "imp(and(p,q),and(r,s))",
+                    "iff(and(p,q),and(r,s))",
+                    "imp(and(p,and(q,r)),and(s,p))",
+                    "iff(and(p,and(q,r)),and(s,p))",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                return right == "imp(and(p,q),and(r,s))"
+
+        with patch("generator.generate_formula_by_variable_count", return_value="imp(and(p,and(q,r)),and(s,p))"):
+            question = build_logical_consequence_question(
+                variable_count=4,
+                correct_options_count=1,
+                wrong_options_count=1,
+                seed=29,
+                bridge=_bridge(PreferSimplerBridge()),
+            )
+
+        reference_size = formula_size(from_prolog(question["question_prolog"]))
+        selected_formulas = [entry["formula_prolog"] for entry in question["options"]]
+        correct_formulas = [entry["formula_prolog"] for entry in question["options"] if entry["is_consequence"]]
+        self.assertEqual(correct_formulas, ["imp(and(p,q),and(r,s))"])
+        self.assertTrue(
+            all(formula_size(from_prolog(formula)) < reference_size for formula in selected_formulas)
         )
 
     def test_logical_consequence_allows_simpler_consequence_and_rejects_commutative_duplicates(self):
