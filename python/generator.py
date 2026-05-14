@@ -18,6 +18,7 @@ from prolog_bridge import PrologBridge, collect_variables, from_prolog, get_defa
 DEFAULT_VARIABLES = ("p", "q", "r", "s", "t")
 VAR_SET_LARGE = ("p", "q", "r", "s", "t")
 VAR_SET_SMALL = ("p", "q", "r", "s")
+MAX_BINARY_OPERATORS = 2
 DEFAULT_FORMULA_SAMPLE_LIMIT = 24
 DEFAULT_FORMULA_FETCH_MULTIPLIER = 8
 FORMULA_HEADS = ("and", "or", "imp", "iff", "not")
@@ -555,7 +556,11 @@ def _get_formulas(
                     safe_fetch(bridge.formula_of_depth, depth, list(variables), timeout=generic_fetch_timeout)
                 )
 
-    filtered_formulas = [formula for formula in formulas if _uses_vars(formula, variables)]
+    filtered_formulas = [
+        formula
+        for formula in formulas
+        if _uses_vars(formula, variables) and _has_valid_binary_operator_count(_as_ast(formula))
+    ]
 
     if cache_key is not None:
         if len(_FORMULA_FETCH_CACHE) >= FORMULA_FETCH_CACHE_MAX:
@@ -617,6 +622,24 @@ def formula_operator_count(expr) -> int:
     if hasattr(expr, "left") and hasattr(expr, "right"):
         return 1 + formula_operator_count(expr.left) + formula_operator_count(expr.right)
     raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
+
+
+def formula_binary_operator_count(expr) -> int:
+    """Conta solo gli operatori binari (and, or, imp, iff) escludendo not."""
+    if hasattr(expr, "name") and not hasattr(expr, "expr") and not hasattr(expr, "left"):
+        return 0
+    if hasattr(expr, "expr"):
+        # Not è unario, non contiamo
+        return formula_binary_operator_count(expr.expr)
+    if hasattr(expr, "left") and hasattr(expr, "right"):
+        # Operatori binari: And, Or, Imp, Iff
+        return 1 + formula_binary_operator_count(expr.left) + formula_binary_operator_count(expr.right)
+    raise TypeError(f"Tipo formula non supportato: {type(expr)!r}")
+
+
+def _has_valid_binary_operator_count(expr, max_operators: int = MAX_BINARY_OPERATORS) -> bool:
+    """Verifica che la formula non abbia più del numero massimo di operatori binari."""
+    return formula_binary_operator_count(expr) <= max_operators
 
 
 def _formula_atom_repetition_count(expr) -> int:
@@ -1221,6 +1244,8 @@ def _pick_modified(
                 continue
             if not _uses_vars(candidate, variables):
                 continue
+            if not _has_valid_binary_operator_count(_as_ast(candidate)):
+                continue
             if not _has_atom_count(candidate, target_atom_count):
                 continue
             if not _is_effective_transformation(question_prolog, candidate):
@@ -1350,6 +1375,7 @@ def _pick_wrongs(
             and candidate not in seen
             and not _has_adjacent_duplicate_atoms(candidate)
             and _uses_vars(candidate, variables)
+            and _has_valid_binary_operator_count(_as_ast(candidate))
             and _has_atom_count(candidate, target_atom_count)
         ]
         if spoken_only:
@@ -1375,6 +1401,7 @@ def _pick_wrongs(
             if candidate
             and not _has_adjacent_duplicate_atoms(candidate)
             and _uses_vars(candidate, variables)
+            and _has_valid_binary_operator_count(_as_ast(candidate))
             and _has_atom_count(candidate, target_atom_count)
         ]
 
@@ -1488,6 +1515,8 @@ def _collect_candidate_formulas(
         if target_atom_count is not None and not _has_atom_count(formula, target_atom_count):
             return
         if forbid_adjacent_duplicate_atoms and _has_adjacent_duplicate_atoms(formula):
+            return
+        if not _has_valid_binary_operator_count(_as_ast(formula)):
             return
         if spoken_only and not _formula_is_spoken_friendly(formula):
             return
