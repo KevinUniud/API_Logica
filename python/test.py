@@ -554,6 +554,40 @@ class GeneratorTests(unittest.TestCase):
         option_heads = {entry["formula_prolog"].split("(", 1)[0] for entry in question["options"]}
         self.assertGreaterEqual(len(option_heads), 2)
 
+    def test_logical_consequence_question_balances_two_and_three_variable_options(self):
+        """Verifica che per domande con 4 variabili le opzioni siano bilanciate tra 2 e 3 variabili."""
+
+        class VariableMixBridge(FakeBridge):
+            def some_depth(self, depth, variables, limit, timeout=10):
+                if tuple(variables) != ("p", "q", "r", "s"):
+                    return []
+                formulas = [
+                    "and(p,q)",
+                    "or(p,q)",
+                    "imp(p,q)",
+                    "iff(p,q)",
+                    "and(p,or(q,r))",
+                    "or(p,and(q,r))",
+                    "imp(and(p,q),r)",
+                    "iff(and(p,q),r)",
+                ]
+                return formulas[:limit]
+
+            def implies_formula(self, left, right, vars_list=None, timeout=10):
+                return right in {"and(p,q)", "imp(p,q)", "and(p,or(q,r))", "imp(and(p,q),r)"}
+
+        with patch("generator.generate_formula_by_variable_count", return_value="and(p,or(q,and(r,s)))"):
+            question = build_logical_consequence_question(
+                variable_count=4,
+                correct_options_count=2,
+                wrong_options_count=2,
+                seed=11,
+                bridge=_bridge(VariableMixBridge()),
+            )
+
+        option_variable_counts = [len(collect_variables(from_prolog(entry["formula_prolog"]))) for entry in question["options"]]
+        self.assertCountEqual(option_variable_counts, [2, 2, 3, 3])
+
     def test_logical_consequence_known_entailment_is_correct(self):
         """Verifica il caso noto: and(p,q) |= or(p,q)."""
 
@@ -1558,6 +1592,25 @@ class GeneratorTests(unittest.TestCase):
         self.assertNotIn("(", phrase)
         self.assertNotIn(")", phrase)
         self.assertFalse(" e " in phrase and " o " in phrase)
+
+    def test_translation_question_spoken_mode_forces_spoken_template(self):
+        """Verifica che la modalita parlata privilegi un template leggibile senza parentesi."""
+        result = build_translation_question(
+            mode="propositional",
+            quantifier_ratio=0.5,
+            wrong_options_count=3,
+            names_pool=["Luca", "Matteo", "Giulia"],
+            actions_pool=["corre", "salta", "nuota"],
+            allow_spoken_mode=True,
+            seed=31,
+            timeout=10,
+        )
+
+        self.assertTrue(result["metadata"]["spoken_mode"])
+        self.assertIn(result["metadata"]["template_used"], {"conjunction_chain", "disjunction_chain"})
+        phrase = result["question_text"].split('"', 2)[1]
+        self.assertNotIn("(", phrase)
+        self.assertNotIn(")", phrase)
 
     def test_translation_question_propositional_allows_repetition_with_single_name_pool(self):
         """Verifica che la modalita proposizionale supporti la ripetizione anche con un solo nome."""

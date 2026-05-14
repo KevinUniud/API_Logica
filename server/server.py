@@ -119,11 +119,13 @@ class GeneratorAutoDepthRequest(RequestBase):
     use_all: bool = Field(default=False, description="Se vero, usa tutte le formule candidate")
     seed: int | None = Field(default=None, description="Seed casuale")
     wrong_answers_count: int = Field(default=3, ge=1, description="Numero di distrazioni errate")
+    allow_spoken_mode: bool = Field(default=False, description="Richiedi formule leggibili in forma parlata senza ambiguita")
 
 
 class GeneratorExprRequest(FormulaRequest):
     wrong_answers_count: int = Field(default=3, ge=1, description="Numero di distrazioni errate")
     seed: int | None = Field(default=None, description="Seed casuale")
+    allow_spoken_mode: bool = Field(default=False, description="Richiedi formule leggibili in forma parlata senza ambiguita")
 
 
 class TruthValueOptionsRequest(RequestBase):
@@ -135,6 +137,7 @@ class TruthValueOptionsRequest(RequestBase):
     true_options_count: int = Field(ge=1, description="Numero di opzioni che devono risultare vere")
     false_options_count: int = Field(ge=1, description="Numero di opzioni che devono risultare false")
     seed: int | None = Field(default=None, description="Seed casuale")
+    allow_spoken_mode: bool = Field(default=False, description="Richiedi formule leggibili in forma parlata senza ambiguita")
 
 
 class FormulaByVariableCountRequest(RequestBase):
@@ -147,6 +150,10 @@ class LogicalConsequenceQuestionRequest(RequestBase):
     variable_count: int = Field(ge=1, description="Numero di variabili da usare nella formula domanda")
     correct_options_count: int = Field(ge=1, description="Numero di opzioni che devono essere conseguenze logiche")
     wrong_options_count: int = Field(ge=1, description="Numero di opzioni che non devono essere conseguenze logiche")
+    allow_spoken_mode: bool = Field(
+        default=False,
+        description="Flag per richiedere formule leggibili in forma parlata senza ambiguita",
+    )
     seed: int | None = Field(default=None, description="Seed casuale")
 
 
@@ -357,6 +364,7 @@ LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES = {
             "variable_count": 4,
             "correct_options_count": 2,
             "wrong_options_count": 2,
+            "allow_spoken_mode": False,
             "seed": 42,
             "timeout": 10,
         },
@@ -858,15 +866,15 @@ for path_suffix, operation_id, summary, payload_model, examples, handler in [
     ("generate-formula-by-variable-count", "generator_generate_formula_by_variable_count", "Genera una formula in sintassi Prolog con un numero specifico di variabili", FormulaByVariableCountRequest, FORMULA_BY_VARIABLE_COUNT_EXAMPLES, lambda payload: generator.generate_formula_by_variable_count(variable_count=payload.variable_count, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
     ("generate-formula-by-variable-count-json", "generator_generate_formula_by_variable_count_json", "Genera una formula con numero variabili esplicito e la restituisce come payload JSON", FormulaByVariableCountRequest, FORMULA_BY_VARIABLE_COUNT_EXAMPLES, lambda payload: generator.generate_formula_by_variable_count_json(variable_count=payload.variable_count, use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
     ("build-exercise", "generator_build_exercise", "Costruisce un esercizio a partire da una formula", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_exercise(expr=payload.expr, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge(), seed=payload.seed, timeout=payload.timeout)),
-    ("build-exercise-from-depth", "generator_build_ex_depth", "Costruisce un esercizio con variabili automatiche (profondita automatica)", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
-    ("build-truth-value-options-question", "generator_build_tvq", "Costruisce una domanda da informazioni booleane sui predicati e opzioni vere/false", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
-    ("build-logical-consequence-question", "generator_build_logical_consequence_question", "Costruisce un quiz di conseguenza logica con opzioni corrette e errate", LogicalConsequenceQuestionRequest, LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES, lambda payload: generator.build_logical_consequence_question(variable_count=payload.variable_count, correct_options_count=payload.correct_options_count, wrong_options_count=payload.wrong_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
+    ("build-exercise-from-depth", "generator_build_ex_depth", "Costruisce un esercizio con variabili automatiche (profondita automatica)", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge(), allow_spoken_mode=payload.allow_spoken_mode)),
+    ("build-truth-value-options-question", "generator_build_tvq", "Costruisce una domanda da informazioni booleane sui predicati e opzioni vere/false", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge(), allow_spoken_mode=payload.allow_spoken_mode)),
+    ("build-logical-consequence-question", "generator_build_logical_consequence_question", "Costruisce un quiz di conseguenza logica con opzioni corrette e errate", LogicalConsequenceQuestionRequest, LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES, lambda payload: generator.build_logical_consequence_question(variable_count=payload.variable_count, correct_options_count=payload.correct_options_count, wrong_options_count=payload.wrong_options_count, timeout=payload.timeout, seed=payload.seed, allow_spoken_mode=payload.allow_spoken_mode, bridge=_build_bridge())),
     ("build-translation-question", "generator_build_translation_question", "Costruisce un quiz di traduzione italiano -> logica", TranslationQuestionRequest, TRANSLATION_QUESTION_EXAMPLES, lambda payload: generator.build_translation_question(mode=payload.mode, quantifier_ratio=payload.quantifier_ratio, wrong_options_count=payload.wrong_options_count, names_pool=payload.names_pool, people_count=payload.people_count, actions_pool=payload.actions_pool, allow_spoken_mode=payload.allow_spoken_mode, seed=payload.seed, timeout=payload.timeout_seconds)),
     ("multiple-questions", "generator_multiple_questions", "Costruisce piu domande in una singola chiamata e le mescola", MultipleQuestionsRequest, MULTIPLE_QUESTIONS_EXAMPLES, lambda payload: generator.multiple_questions([item.model_dump() for item in payload.questions], seed=payload.seed, bridge=_build_bridge())),
-    ("build-exercise-json-string", "generator_build_ex_json", "Costruisce un esercizio e lo serializza come stringa JSON", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_ex_json(expr=payload.expr, bridge=_build_bridge(), seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, timeout=payload.timeout)),
-    ("build-exercise-from-depth-json-string", "generator_build_ex_depth_json", "Costruisce un esercizio con variabili automatiche e lo serializza come stringa JSON", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth_json(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge())),
-    ("build-truth-value-options-question-json-string", "generator_build_tvq_json", "Costruisce la domanda con opzioni vere/false e la serializza come JSON", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq_json(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
-    ("build-logical-consequence-question-json-string", "generator_build_logical_consequence_question_json", "Costruisce il quiz di conseguenza logica e lo serializza come JSON", LogicalConsequenceQuestionRequest, LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES, lambda payload: generator.build_logical_consequence_question_json(variable_count=payload.variable_count, correct_options_count=payload.correct_options_count, wrong_options_count=payload.wrong_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge())),
+    ("build-exercise-json-string", "generator_build_ex_json", "Costruisce un esercizio e lo serializza come stringa JSON", GeneratorExprRequest, GENERATOR_EXPR_EXAMPLES, lambda payload: generator.build_ex_json(expr=payload.expr, bridge=_build_bridge(), seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, timeout=payload.timeout, allow_spoken_mode=payload.allow_spoken_mode)),
+    ("build-exercise-from-depth-json-string", "generator_build_ex_depth_json", "Costruisce un esercizio con variabili automatiche e lo serializza come stringa JSON", GeneratorAutoDepthRequest, GENERATOR_DEPTH_EXAMPLES, lambda payload: generator.build_ex_depth_json(use_all=payload.use_all, timeout=payload.timeout, seed=payload.seed, wrong_answers_count=payload.wrong_answers_count, bridge=_build_bridge(), allow_spoken_mode=payload.allow_spoken_mode)),
+    ("build-truth-value-options-question-json-string", "generator_build_tvq_json", "Costruisce la domanda con opzioni vere/false e la serializza come JSON", TruthValueOptionsRequest, TRUTH_VALUE_OPTIONS_EXAMPLES, lambda payload: generator.build_tvq_json(predicate_count=payload.predicate_count, true_options_count=payload.true_options_count, false_options_count=payload.false_options_count, timeout=payload.timeout, seed=payload.seed, bridge=_build_bridge(), allow_spoken_mode=payload.allow_spoken_mode)),
+    ("build-logical-consequence-question-json-string", "generator_build_logical_consequence_question_json", "Costruisce il quiz di conseguenza logica e lo serializza come JSON", LogicalConsequenceQuestionRequest, LOGICAL_CONSEQUENCE_QUESTION_EXAMPLES, lambda payload: generator.build_logical_consequence_question_json(variable_count=payload.variable_count, correct_options_count=payload.correct_options_count, wrong_options_count=payload.wrong_options_count, timeout=payload.timeout, seed=payload.seed, allow_spoken_mode=payload.allow_spoken_mode, bridge=_build_bridge())),
 ]:
     _add_post_route(
         path=f"/api/generator/{path_suffix}",

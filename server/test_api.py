@@ -111,6 +111,7 @@ class ApiTests(unittest.TestCase):
                     "variable_count": 3,
                     "correct_options_count": 1,
                     "wrong_options_count": 1,
+                    "allow_spoken_mode": True,
                     "seed": 42,
                 },
             )
@@ -135,6 +136,7 @@ class ApiTests(unittest.TestCase):
                     "variable_count": 3,
                     "correct_options_count": 1,
                     "wrong_options_count": 3,
+                    "allow_spoken_mode": True,
                     "seed": 42,
                 },
             )

@@ -250,6 +250,27 @@ def _formula_head(formula: Any) -> str:
     return prolog_formula.split("(", 1)[0]
 
 
+def _formula_is_spoken_friendly(expr: Any) -> bool:
+    """Verifica che la formula sia leggibile in forma parlata senza parentesi ambigue.
+
+    Criterio semplice: ammette solo variabili e operatori associativi `and`/`or` (eventualmente annidati).
+    Esclude `imp`, `iff`, `not` perché richiedono parentesi/strutture non-lineari.
+    """
+    ast = _as_ast(expr)
+
+    def walk(node: Any) -> bool:
+        if isinstance(node, Var):
+            return True
+        if isinstance(node, Not):
+            return False
+        if isinstance(node, (And, Or)):
+            return walk(node.left) and walk(node.right)
+        # Imp/Iff and other node types are not spoken-friendly
+        return False
+
+    return walk(ast)
+
+
 def _has_operator_diversity(formulas: Sequence[str], minimum_distinct_heads: int = 2) -> bool:
     """Verifica che l insieme di formule includa abbastanza operatori principali distinti."""
     if minimum_distinct_heads <= 1:
@@ -1183,6 +1204,7 @@ def _pick_modified(
     target_atom_count: int | None = None,
     seed: int | None = None,
     timeout: int = 10,
+    spoken_only: bool = False,
 ) -> tuple[str, int]:
     """Seleziona una formula equivalente con almeno due trasformazioni non banali."""
     rng = random.Random(seed)
@@ -1192,6 +1214,8 @@ def _pick_modified(
         selected: list[str] = []
         for candidate in source:
             if not candidate or candidate == question_prolog or candidate in seen:
+                continue
+            if spoken_only and not _formula_is_spoken_friendly(candidate):
                 continue
             if _has_adjacent_duplicate_atoms(candidate):
                 continue
@@ -1303,6 +1327,7 @@ def _pick_wrongs(
     seed: int | None = None,
     timeout: int = 10,
     timeout_provider: Callable[[int], int] | None = None,
+    spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie distractor non equivalenti per una formula domanda."""
     rng = random.Random(seed)
@@ -1327,6 +1352,8 @@ def _pick_wrongs(
             and _uses_vars(candidate, variables)
             and _has_atom_count(candidate, target_atom_count)
         ]
+        if spoken_only:
+            unseen = [c for c in unseen if _formula_is_spoken_friendly(c)]
         if not unseen:
             return False
 
@@ -1439,6 +1466,7 @@ def _collect_candidate_formulas(
     dedupe_by_commutative_signature: bool = False,
     require_non_empty_vars: bool = False,
     forbid_adjacent_duplicate_atoms: bool = False,
+    spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie un pool di formule candidate con vincoli condivisi tra builder quiz."""
     candidates: list[str] = []
@@ -1460,6 +1488,8 @@ def _collect_candidate_formulas(
         if target_atom_count is not None and not _has_atom_count(formula, target_atom_count):
             return
         if forbid_adjacent_duplicate_atoms and _has_adjacent_duplicate_atoms(formula):
+            return
+        if spoken_only and not _formula_is_spoken_friendly(formula):
             return
 
         if dedupe_by_commutative_signature:
@@ -1589,6 +1619,14 @@ def _logical_consequence_special_bucket(formula: str) -> int | None:
     return None
 
 
+def _logical_consequence_variable_bucket(formula: str) -> int | None:
+    """Restituisce il bucket di cardinalita delle variabili per le opzioni di conseguenza logica."""
+    variable_count = len(collect_variables(_as_ast(formula)))
+    if variable_count in (2, 3):
+        return variable_count
+    return None
+
+
 def _select_logical_consequence_options(
     *,
     rng: random.Random,
@@ -1669,6 +1707,81 @@ def _select_logical_consequence_options(
         selected_wrong.extend(rng.sample(remaining_wrong_pool, remaining_wrong))
 
         trial_options = selected_correct + selected_wrong
+        if len(set(trial_options)) != len(trial_options):
+            continue
+        if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
+            continue
+
+        return selected_correct, selected_wrong
+
+    return None
+
+
+def _select_logical_consequence_variable_mix(
+    *,
+    rng: random.Random,
+    consequence_candidates: Sequence[str],
+    non_consequence_candidates: Sequence[str],
+    correct_count: int,
+    wrong_count: int,
+) -> tuple[list[str], list[str]] | None:
+    """Seleziona 4 opzioni bilanciando 2 formule a 2 variabili e 2 a 3 variabili."""
+    if correct_count + wrong_count != 4:
+        return None
+
+    two_correct_candidates = [
+        candidate
+        for candidate in dict.fromkeys(consequence_candidates)
+        if _logical_consequence_variable_bucket(candidate) == 2
+    ]
+    two_wrong_candidates = [
+        candidate
+        for candidate in dict.fromkeys(non_consequence_candidates)
+        if _logical_consequence_variable_bucket(candidate) == 2
+    ]
+    three_correct_candidates = [
+        candidate
+        for candidate in dict.fromkeys(consequence_candidates)
+        if _logical_consequence_variable_bucket(candidate) == 3
+    ]
+    three_wrong_candidates = [
+        candidate
+        for candidate in dict.fromkeys(non_consequence_candidates)
+        if _logical_consequence_variable_bucket(candidate) == 3
+    ]
+
+    if len(two_correct_candidates) + len(two_wrong_candidates) < 2:
+        return None
+    if len(three_correct_candidates) + len(three_wrong_candidates) < 2:
+        return None
+
+    def pick_bucket(candidates: Sequence[str], count: int) -> list[str]:
+        if count == 0:
+            return []
+        return _select_formulas_with_repetition_policy(candidates, count, rng)
+
+    for correct_two_count in range(max(0, correct_count - 2), min(2, correct_count) + 1):
+        wrong_two_count = 2 - correct_two_count
+        correct_three_count = correct_count - correct_two_count
+        wrong_three_count = wrong_count - wrong_two_count
+
+        if correct_three_count < 0 or wrong_three_count < 0:
+            continue
+        if correct_three_count > 2 or wrong_three_count > 2:
+            continue
+
+        try:
+            selected_two_correct = pick_bucket(two_correct_candidates, correct_two_count)
+            selected_two_wrong = pick_bucket(two_wrong_candidates, wrong_two_count)
+            selected_three_correct = pick_bucket(three_correct_candidates, correct_three_count)
+            selected_three_wrong = pick_bucket(three_wrong_candidates, wrong_three_count)
+        except RuntimeError:
+            continue
+
+        selected_correct = selected_two_correct + selected_three_correct
+        selected_wrong = selected_two_wrong + selected_three_wrong
+        trial_options = selected_correct + selected_wrong
+
         if len(set(trial_options)) != len(trial_options):
             continue
         if len({_commutative_signature(option) for option in trial_options}) != len(trial_options):
@@ -1763,6 +1876,7 @@ def build_tvq(
     seed: int | None = None,
     operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Costruisce una domanda vero/falso da informazioni sui predicati."""
     _req_int_ge("predicate_count", predicate_count, 1)
@@ -1803,6 +1917,7 @@ def build_tvq(
         target_atom_count=target_atom_count,
         require_non_empty_vars=True,
         forbid_adjacent_duplicate_atoms=True,
+        spoken_only=allow_spoken_mode,
     )
 
     if len(candidates) < required_options:
@@ -1867,6 +1982,7 @@ def build_tvq(
             "true_options": [_formula_entry(formula, rng=rng, is_true=True) for formula in selected_true],
             "false_options": [_formula_entry(formula, rng=rng, is_true=False) for formula in selected_false],
             "source": "prolog_assignment_and_eval",
+            "spoken_mode": allow_spoken_mode,
         }
 
         _ensure_keys(result, ["information", "options", "variables"])
@@ -1884,6 +2000,7 @@ def build_logical_consequence_question(
     timeout: int = 10,
     seed: int | None = None,
     operator_cycles: int | None = None,
+    allow_spoken_mode: bool = False,
     bridge: PrologBridge | None = None,
 ) -> dict:
     """Costruisce un quiz di conseguenza logica con opzioni corrette/errate.
@@ -2011,13 +2128,26 @@ def build_logical_consequence_question(
     if len(consequence_candidates) < correct_options_count or len(non_consequence_candidates) < wrong_options_count:
         raise RuntimeError("Impossibile trovare abbastanza opzioni per il quiz di conseguenza logica")
 
-    selected = _select_logical_consequence_options(
-        rng=rng,
-        consequence_candidates=consequence_candidates,
-        non_consequence_candidates=non_consequence_candidates,
-        correct_count=correct_options_count,
-        wrong_count=wrong_options_count,
-    )
+    if variable_count >= 4 and required_options == 4:
+        selected = _select_logical_consequence_variable_mix(
+            rng=rng,
+            consequence_candidates=consequence_candidates,
+            non_consequence_candidates=non_consequence_candidates,
+            correct_count=correct_options_count,
+            wrong_count=wrong_options_count,
+        )
+        if selected is None:
+            raise RuntimeError(
+                "Impossibile trovare abbastanza opzioni con 2 formule a 2 variabili e 2 formule a 3 variabili"
+            )
+    else:
+        selected = _select_logical_consequence_options(
+            rng=rng,
+            consequence_candidates=consequence_candidates,
+            non_consequence_candidates=non_consequence_candidates,
+            correct_count=correct_options_count,
+            wrong_count=wrong_options_count,
+        )
 
     if selected is None:
         raise RuntimeError(
@@ -2046,6 +2176,7 @@ def build_logical_consequence_question(
         "variables": variables,
         "question_prolog": question_prolog_display,
         "options": options,
+        "spoken_mode": allow_spoken_mode,
         "source": "prolog_implies_formula",
     }
 
@@ -2064,6 +2195,7 @@ def build_exercise(
     bridge: PrologBridge | None = None,
     seed: int | None = None,
     timeout: int = 10,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Costruisce un esercizio con formula originale, modificata e distrazioni."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
@@ -2145,6 +2277,7 @@ def build_exercise(
         target_atom_count=question_atom_count,
         seed=seed,
         timeout=remaining_timeout(total_timeout),
+        spoken_only=allow_spoken_mode,
     )
 
     if modified_prolog == question_prolog:
@@ -2163,6 +2296,7 @@ def build_exercise(
         seed=seed,
         timeout=remaining_timeout(total_timeout),
         timeout_provider=remaining_timeout,
+        spoken_only=allow_spoken_mode,
     )
 
     _require_pairwise_distinct(
@@ -2190,6 +2324,7 @@ def build_exercise(
         "question_prolog": question_prolog_display,
         "correct_answer_prolog": _scramble_formula_prolog(modified_prolog, rng),
         "wrong_answers_prolog": [_scramble_formula_prolog(formula, rng) for formula in wrong_selected],
+        "spoken_mode": allow_spoken_mode,
     }
 
     for index, wrong_formula in enumerate(wrong_selected, start=1):
@@ -2214,6 +2349,7 @@ def build_ex_depth(
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Costruisce un esercizio con variabili e trasformazioni completamente automatiche."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
@@ -2255,6 +2391,7 @@ def build_ex_depth(
                 operator_cycles=operator_cycles,
                 wrong_from_correct=wrong_from_correct,
                 timeout=remaining_timeout(None),
+                allow_spoken_mode=allow_spoken_mode,
             )
         except RuntimeError as exc:
             last_error = exc
@@ -2273,6 +2410,7 @@ def build_ex_json(
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     timeout: int = 10,
+    allow_spoken_mode: bool = False,
 ) -> str:
     """Serializza l output di build_exercise come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
@@ -2288,6 +2426,7 @@ def build_ex_json(
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             timeout=timeout,
+            allow_spoken_mode=allow_spoken_mode,
         )
     )
 
@@ -2301,6 +2440,7 @@ def build_ex_depth_json(
     operator_cycles: int | None = None,
     wrong_from_correct: bool = False,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> str:
     """Serializza l output di build_ex_depth come stringa JSON formattata."""
     _req_int_ge("timeout", int(timeout), 1)
@@ -2317,6 +2457,7 @@ def build_ex_depth_json(
             operator_cycles=operator_cycles,
             wrong_from_correct=wrong_from_correct,
             bridge=bridge,
+            allow_spoken_mode=allow_spoken_mode,
         )
     )
 
@@ -2329,6 +2470,7 @@ def build_tvq_json(
     seed: int | None = None,
     operator_cycles: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> str:
     """Serializza l output di build_tvq come stringa JSON formattata."""
     _req_int_ge("predicate_count", predicate_count, 1)
@@ -2346,6 +2488,7 @@ def build_tvq_json(
             seed=seed,
             operator_cycles=operator_cycles,
             bridge=bridge,
+            allow_spoken_mode=allow_spoken_mode,
         )
     )
 
@@ -2357,6 +2500,7 @@ def build_logical_consequence_question_json(
     timeout: int = 10,
     seed: int | None = None,
     operator_cycles: int | None = None,
+    allow_spoken_mode: bool = False,
     bridge: PrologBridge | None = None,
 ) -> str:
     """Serializza l output del quiz di conseguenza logica come stringa JSON."""
@@ -2374,6 +2518,7 @@ def build_logical_consequence_question_json(
             timeout=timeout,
             seed=seed,
             operator_cycles=operator_cycles,
+            allow_spoken_mode=allow_spoken_mode,
             bridge=bridge,
         )
     )
@@ -2475,6 +2620,7 @@ def _build_translation_question_propositional(
     actions_pool: Sequence[str],
     rng: random.Random,
     template_name: str,
+    allow_spoken_mode: bool,
 ) -> dict[str, Any]:
     """Costruisce un quiz di traduzione in logica proposizionale."""
     if len(names_pool) < 1:
@@ -2542,6 +2688,7 @@ def _build_translation_question_propositional(
             "names_used": [name for name in names_pool if any(name in text for text in symbol_to_text.values())],
             "actions_used": list(selected_actions),
             "template_used": template_name,
+            "spoken_mode": allow_spoken_mode,
             "repetition_used": len(set(atoms)) < len(atoms),
             "source": "rule_generator",
         },
@@ -2697,19 +2844,26 @@ def build_translation_question(
             if people_count is None
             else rng.sample(list(normalized_names_pool), people_count)
         )
-        # Sceglie il template in base a people_count
-        if people_count is not None and people_count >= 3:
-            # Per 3+ persone, usa template con 3 simboli
-            chosen_template = rng.choice(["conjunction_chain", "disjunction_chain"])
+        spoken_templates = ["conjunction_chain", "disjunction_chain"]
+        default_templates = ["implication", "conjunction_chain", "disjunction_chain"]
+        if allow_spoken_mode:
+            if len(selected_names_pool) >= 3 and len(actions_pool) >= 3:
+                chosen_template = rng.choice(spoken_templates)
+            else:
+                chosen_template = "implication"
+        elif people_count is not None and people_count >= 3:
+            chosen_template = rng.choice(spoken_templates)
         else:
-            # Scelta casuale tra tutti i template
-            chosen_template = rng.choice(["implication", "conjunction_chain", "disjunction_chain"])
+            chosen_template = rng.choice(default_templates)
         result = _build_translation_question_propositional(
             names_pool=selected_names_pool,
             actions_pool=actions_pool,
             rng=rng,
             template_name=chosen_template,
+            allow_spoken_mode=allow_spoken_mode,
         )
+
+    result["spoken_mode"] = allow_spoken_mode
 
     options = result["options"]
     if len(options) != 4:
