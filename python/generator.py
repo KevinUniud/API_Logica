@@ -559,11 +559,26 @@ def _get_formulas(
                     safe_fetch(bridge.formula_of_depth, depth, list(variables), timeout=generic_fetch_timeout)
                 )
 
-    filtered_formulas = [
-        formula
-        for formula in formulas
-        if _uses_vars(formula, variables) and _has_valid_binary_operator_count(_as_ast(formula))
-    ]
+    # Quando `use_all` è True richiediamo che la formula usi esattamente
+    # tutte le variabili fornite. Se `use_all` è False invece accettiamo
+    # anche formule che usino un sottoinsieme non vuoto delle variabili
+    # richieste (ma senza introdurre variabili esterne), per evitare di
+    # filtrare eccessivamente il pool quando non è necessario.
+    if use_all:
+        filtered_formulas = [
+            formula
+            for formula in formulas
+            if _uses_vars(formula, variables) and _has_valid_binary_operator_count(_as_ast(formula))
+        ]
+    else:
+        allowed_vars = set(variables)
+        filtered_formulas = [
+            formula
+            for formula in formulas
+            if set(collect_variables(_as_ast(formula))).issubset(allowed_vars)
+            and collect_variables(_as_ast(formula))
+            and _has_valid_binary_operator_count(_as_ast(formula))
+        ]
 
     if cache_key is not None:
         if len(_FORMULA_FETCH_CACHE) >= FORMULA_FETCH_CACHE_MAX:
