@@ -12,6 +12,7 @@ from generator import (  # noqa: E402
     build_tvq,
     generate_formula_by_variable_count,
 )
+from constants import JSON_INDENT  # noqa: E402
 
 
 OUTPUT_PATH = Path(__file__).resolve().parent / "dump.txt"
@@ -104,7 +105,7 @@ def main() -> None:
         "build_logical_consequence_question": _only_formulas_logical_consequence(consequence),
     }
 
-    OUTPUT_PATH.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    OUTPUT_PATH.write_text(json.dumps(result, indent=JSON_INDENT, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"Scritto {OUTPUT_PATH}")
 
 

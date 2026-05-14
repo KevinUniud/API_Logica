@@ -9,8 +9,15 @@ import shutil
 import subprocess
 import threading
 # Cache locale per liste variabili gia normalizzate.
+# stdlib
 from functools import lru_cache
 from pathlib import Path
+import logging
+
+from config import SWI_PROLOG_PATH, PROLOG_DIR
+
+
+logger = logging.getLogger(__name__)
 # Tipi usati nelle firme pubbliche del bridge.
 from typing import Iterable, Sequence
 
@@ -364,14 +371,15 @@ class PrologBridge:
         self,
         prolog_dir: str | Path | None = None,
         entry_file: str = "templates.pl",
-        swipl_path: str = "swipl",
+        swipl_path: str = SWI_PROLOG_PATH,
         persistent: bool = True,
     ):
         """Wrapper bridge per la routine Prolog: __init__."""
         self.swipl_path = swipl_path
         self.persistent = persistent
         if prolog_dir is None:
-            self.prolog_dir = Path(__file__).resolve().parent.parent / "prolog"
+            # default from config.PROLOG_DIR
+            self.prolog_dir = Path(PROLOG_DIR)
         else:
             self.prolog_dir = Path(prolog_dir).resolve()
         self.entry_file = self.prolog_dir / entry_file
