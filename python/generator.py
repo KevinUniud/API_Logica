@@ -255,10 +255,11 @@ def _formula_head(formula: Any) -> str:
 
 
 def _formula_is_spoken_friendly(expr: Any) -> bool:
-    """Verifica che la formula sia leggibile in forma parlata senza parentesi ambigue.
+    """Verifica se la formula può essere resa in forma parlata.
 
-    Criterio semplice: ammette solo variabili e operatori associativi `and`/`or` (eventualmente annidati).
-    Esclude `imp`, `iff`, `not` perché richiedono parentesi/strutture non-lineari.
+    Accetta ora le varianti con `not`, `and`, `or`, `imp`, `iff`.
+    La resa parlata potrebbe introdurre parentesi solo quando necessario per
+    evitare ambiguita (es. miscelazione `and`/`or`).
     """
     ast = _as_ast(expr)
 
@@ -266,10 +267,9 @@ def _formula_is_spoken_friendly(expr: Any) -> bool:
         if isinstance(node, Var):
             return True
         if isinstance(node, Not):
-            return False
-        if isinstance(node, (And, Or)):
+            return walk(node.expr)
+        if isinstance(node, (And, Or, Imp, Iff)):
             return walk(node.left) and walk(node.right)
-        # Imp/Iff and other node types are not spoken-friendly
         return False
 
     return walk(ast)
@@ -888,6 +888,65 @@ def _scramble_commutative_formula(expr: Any, rng: random.Random) -> Any:
 def _scramble_formula_prolog(formula: Any, rng: random.Random) -> str:
     """Restituisce una formula Prolog con and/or rimescolati quando possibile."""
     return to_prolog(_scramble_commutative_formula(formula, rng))
+
+
+def _to_spoken_string(formula: Any, rng: random.Random | None = None) -> str:
+    """Rende una formula 'spoken-friendly' senza parentesi, ad esempio
+    and(p, and(q, r)) -> "p and q and r".
+
+    Se viene passato `rng` viene applicato lo stesso rimescolamento commutativo
+    usato altrove prima del rendering per diversificare l'output parlato.
+    """
+    ast = _scramble_commutative_formula(formula, rng) if rng is not None else _as_ast(formula)
+
+    def flatten_and(node: Any) -> list[str]:
+        if isinstance(node, Var):
+            return [node.name]
+        if isinstance(node, And):
+            return flatten_and(node.left) + flatten_and(node.right)
+        # Fallback: render subterm as prolog-if-not-var
+        return [to_prolog(node)]
+
+    def flatten_or(node: Any) -> list[str]:
+        if isinstance(node, Var):
+            return [node.name]
+        if isinstance(node, Or):
+            return flatten_or(node.left) + flatten_or(node.right)
+        return [to_prolog(node)]
+
+    # Precedence values: higher means binds tighter
+    def prec(node: Any) -> int:
+        if isinstance(node, Var):
+            return 100
+        if isinstance(node, Not):
+            return 90
+        if isinstance(node, And):
+            return 70
+        if isinstance(node, Or):
+            return 70
+        if isinstance(node, Imp):
+            return 50
+        if isinstance(node, Iff):
+            return 40
+        return 0
+
+    def render(node: Any) -> str:
+        if isinstance(node, Var):
+            return node.name
+        if isinstance(node, Not):
+            child = node.expr
+            return f"not {render(child)}"
+        if isinstance(node, And):
+            return f"{render(node.left)} and {render(node.right)}"
+        if isinstance(node, Or):
+            return f"{render(node.left)} or {render(node.right)}"
+        if isinstance(node, Imp):
+            return f"{render(node.left)} imp {render(node.right)}"
+        if isinstance(node, Iff):
+            return f"{render(node.left)} iff {render(node.right)}"
+        return to_prolog(node)
+
+    return render(ast)
 
 
 def _formula_entry(expr: Any, *, rng: random.Random | None = None, **extra) -> dict:
@@ -1724,7 +1783,10 @@ def build_logical_consequence_question(
         bridge=bridge,
     )
     question_prolog = _as_prolog(question_formula)
-    question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
+    if allow_spoken_mode and _formula_is_spoken_friendly(question_prolog):
+        question_prolog_display = _to_spoken_string(question_prolog, rng)
+    else:
+        question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
 
     candidates = _collect_candidate_formulas(
         bridge=bridge,
@@ -1967,7 +2029,7 @@ def build_exercise(
         target_atom_count=question_atom_count,
         seed=seed,
         timeout=remaining_timeout(total_timeout),
-        spoken_only=allow_spoken_mode,
+        spoken_only=False,
     )
 
     if modified_prolog == question_prolog:
@@ -1986,7 +2048,7 @@ def build_exercise(
         seed=seed,
         timeout=remaining_timeout(total_timeout),
         timeout_provider=remaining_timeout,
-        spoken_only=allow_spoken_mode,
+        spoken_only=False,
     )
 
     _require_pairwise_distinct(
@@ -2001,7 +2063,10 @@ def build_exercise(
         label="formula modificata",
         steps=rewrite_steps,
     )
-    question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
+    if allow_spoken_mode and _formula_is_spoken_friendly(question_prolog):
+        question_prolog_display = _to_spoken_string(question_prolog, rng)
+    else:
+        question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
     exercise = {
         "original_formula": original_formula,
         "modified_formula": modified_formula,
