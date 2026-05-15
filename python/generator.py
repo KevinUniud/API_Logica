@@ -898,6 +898,12 @@ def _to_spoken_string(formula: Any, rng: random.Random | None = None) -> str:
     usato altrove prima del rendering per diversificare l'output parlato.
     """
     ast = _scramble_commutative_formula(formula, rng) if rng is not None else _as_ast(formula)
+    # Normalizza le negazioni in modo che compaiano solo sugli atomi
+    try:
+        ast = _push_negations(ast)
+    except Exception:
+        # In caso di problemi con la trasformazione, fallback alla AST originale
+        ast = _as_ast(formula)
 
     def flatten_and(node: Any) -> list[str]:
         if isinstance(node, Var):
@@ -2067,6 +2073,19 @@ def build_exercise(
         question_prolog_display = _to_spoken_string(question_prolog, rng)
     else:
         question_prolog_display = _scramble_formula_prolog(question_prolog, rng)
+    # Prepare displayed correct/wrong answers using spoken form when requested
+    if allow_spoken_mode and _formula_is_spoken_friendly(modified_prolog):
+        correct_answer_display = _to_spoken_string(modified_prolog, rng)
+    else:
+        correct_answer_display = _scramble_formula_prolog(modified_prolog, rng)
+
+    wrong_answers_display = []
+    for formula in wrong_selected:
+        if allow_spoken_mode and _formula_is_spoken_friendly(formula):
+            wrong_answers_display.append(_to_spoken_string(formula, rng))
+        else:
+            wrong_answers_display.append(_scramble_formula_prolog(formula, rng))
+
     exercise = {
         "original_formula": original_formula,
         "modified_formula": modified_formula,
@@ -2077,8 +2096,8 @@ def build_exercise(
         "rewrite_steps": rewrite_steps,
         "source": "prolog_builder",
         "question_prolog": question_prolog_display,
-        "correct_answer_prolog": _scramble_formula_prolog(modified_prolog, rng),
-        "wrong_answers_prolog": [_scramble_formula_prolog(formula, rng) for formula in wrong_selected],
+        "correct_answer_prolog": correct_answer_display,
+        "wrong_answers_prolog": wrong_answers_display,
         "spoken_mode": allow_spoken_mode,
     }
 
