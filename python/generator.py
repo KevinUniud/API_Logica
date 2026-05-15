@@ -2041,16 +2041,18 @@ def build_ex_depth(
     bridge: PrologBridge | None = None,
     allow_spoken_mode: bool = False,
 ) -> dict:
-    """Costruisce un esercizio con variabili e trasformazioni completamente automatiche."""
+    """Costruisce un esercizio con 3 atomi e 2 operatori binari, lasciando liberi i not."""
     _req_int_ge("wrong_answers_count", wrong_answers_count, 1)
     if operator_cycles is not None:
         _req_int_ge("operator_cycles", operator_cycles, 0)
     _req_int_ge("timeout", int(timeout), 1)
+    if depth is not None:
+        _req_int_ge("depth", depth, 2)
     bridge = _ensure_bridge(bridge)
     rng = random.Random(seed)
     remaining_timeout = _make_timeout_provider(timeout)
 
-    variables = _select_random_var_set(rng=rng, depth=depth)
+    variables = _default_vars(3)
 
     depth, variables = _resolve_depth(depth, variables)
     formulas = _get_formulas(

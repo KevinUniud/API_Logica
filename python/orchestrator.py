@@ -722,3 +722,11 @@ def multiple_questions(
     generator._pick_modified = _pick_modified
     generator._pick_wrongs = _pick_wrongs
     return batch
+
+
+# Install the orchestrator helpers on import so the public generator entry points
+# can work without requiring an extra bootstrap call.
+generator._transform_answer_candidates = _transform_answer_candidates
+generator._collect_candidate_formulas = _collect_candidate_formulas
+generator._pick_modified = _pick_modified
+generator._pick_wrongs = _pick_wrongs

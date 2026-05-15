@@ -521,7 +521,7 @@ Note:
 - i distractor vengono filtrati per mantenere solo formule non equivalenti e con le variabili richieste
 
 ### build_ex_depth(depth=None, use_all=False, timeout=10, seed=None, wrong_answers_count=3, operator_cycles=None, wrong_from_correct=False, bridge=None)
-Genera prima una formula con set variabili automatico, poi costruisce un esercizio completo come sopra.
+Genera una formula automatica per un esercizio con 3 atomi e 2 operatori binari; i `not` possono comparire liberamente secondo la generazione standard.
 
 ### build_tvq(predicate_count, true_options_count, false_options_count, timeout=10, seed=None, bridge=None)
 Costruisce una domanda del tipo:
