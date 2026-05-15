@@ -11,7 +11,7 @@ import random
 import logging
 
 from config import DEFAULT_TIMEOUT, configure_logging
-from constants import JSON_INDENT
+from constants import JSON_INDENT, MIN_TRANSFORM_STEPS, MAX_TRANSFORM_STEPS, ATOM_SWAP_PROBABILITY, MAX_BINARY_OPERATORS_MODIFIED
 
 from prolog_bridge import get_default_bridge, PrologBridge
 import generator
@@ -344,7 +344,9 @@ def _pick_modified(
                 continue
             if not generator._uses_vars(candidate, variables):
                 continue
-            if not generator._has_valid_binary_operator_count(generator._as_ast(candidate)):
+            if not generator._has_valid_binary_operator_count(
+                generator._as_ast(candidate), max_operators=MAX_BINARY_OPERATORS_MODIFIED
+            ):
                 continue
             if not generator._has_atom_count(candidate, target_atom_count):
                 continue
@@ -357,7 +359,7 @@ def _pick_modified(
         return selected
 
     def finalize_candidate(candidate: str, steps: int) -> tuple[str, int]:
-        selected = generator._maybe_swap_and_or(candidate, rng)
+        selected = generator._maybe_swap_and_or(candidate, rng, swap_probability=ATOM_SWAP_PROBABILITY)
         selected_steps = steps
         if generator._needs_extra_transformation(candidate):
             try:
@@ -378,7 +380,7 @@ def _pick_modified(
             if extra_candidates:
                 equivalent_extra = filter_equiv_batch(extra_candidates)
                 if equivalent_extra:
-                    selected = generator._maybe_swap_and_or(rng.choice(equivalent_extra), rng)
+                    selected = generator._maybe_swap_and_or(rng.choice(equivalent_extra), rng, swap_probability=ATOM_SWAP_PROBABILITY)
                     selected_steps += 1
         return selected, selected_steps
 
@@ -392,7 +394,7 @@ def _pick_modified(
             selected, selected_steps = finalize_candidate(candidate, base_steps(idx))
             if generator._has_adjacent_duplicate_atoms(selected):
                 continue
-            if selected_steps < generator.MIN_NON_TRIVIAL_CORRECT_STEPS:
+            if not (MIN_TRANSFORM_STEPS <= selected_steps <= MAX_TRANSFORM_STEPS):
                 continue
             if not generator._is_effective_transformation(question_prolog, selected):
                 continue
@@ -474,7 +476,9 @@ def _pick_wrongs(
             and candidate not in seen
             and not generator._has_adjacent_duplicate_atoms(candidate)
             and generator._uses_vars(candidate, variables)
-            and generator._has_valid_binary_operator_count(generator._as_ast(candidate))
+            and generator._has_valid_binary_operator_count(
+                generator._as_ast(candidate), max_operators=MAX_BINARY_OPERATORS_MODIFIED
+            )
             and generator._has_atom_count(candidate, target_atom_count)
         ]
         if spoken_only:
@@ -500,7 +504,9 @@ def _pick_wrongs(
             if candidate
             and not generator._has_adjacent_duplicate_atoms(candidate)
             and generator._uses_vars(candidate, variables)
-            and generator._has_valid_binary_operator_count(generator._as_ast(candidate))
+            and generator._has_valid_binary_operator_count(
+                generator._as_ast(candidate), max_operators=MAX_BINARY_OPERATORS_MODIFIED
+            )
             and generator._has_atom_count(candidate, target_atom_count)
         ]
 
