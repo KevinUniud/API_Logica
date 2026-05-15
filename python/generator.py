@@ -1122,7 +1122,20 @@ def _transform_answer_candidates(
     
     In entrambi i casi: deduplicazione e normalizzazione finale.
     """
-    """Orchestration removed: use `orchestrator._transform_answer_candidates` instead."""
+    stub = _transform_answer_candidates
+    try:
+        import orchestrator  # noqa: F401
+    except Exception:
+        pass
+    impl = globals().get("_transform_answer_candidates")
+    if impl is not None and impl is not stub:
+        return impl(
+            formula=formula,
+            bridge=bridge,
+            rng=rng,
+            operator_cycles=operator_cycles,
+            timeout_provider=timeout_provider,
+        )
     raise RuntimeError("orchestrator required: use orchestrator._transform_answer_candidates")
 
 
@@ -1133,6 +1146,7 @@ def generate_formula(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ):
     """Genera una formula rispettando vincoli di profondita e variabili."""
     _req_int_ge("timeout", int(timeout), 1)
@@ -1161,6 +1175,8 @@ def generate_formula(
     )
     if not selected:
         raise RuntimeError("Formula generata non valida")
+    if allow_spoken_mode:
+        return _to_spoken_string(selected)
     return selected
 
 
@@ -1199,6 +1215,7 @@ def generate_formula_by_variable_count(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> str:
     """Genera una formula che usa esattamente il numero di variabili richiesto."""
     _req_int_ge("variable_count", variable_count, 1)
@@ -1213,6 +1230,7 @@ def generate_formula_by_variable_count(
         timeout=timeout,
         seed=seed,
         bridge=bridge,
+        allow_spoken_mode=allow_spoken_mode,
     )
 
 
@@ -1261,7 +1279,23 @@ def _pick_modified(
     spoken_only: bool = False,
 ) -> tuple[str, int]:
     """Seleziona una formula equivalente con almeno due trasformazioni non banali."""
-    """Orchestration removed: use `orchestrator._pick_modified` instead."""
+    stub = _pick_modified
+    try:
+        import orchestrator  # noqa: F401
+    except Exception:
+        pass
+    impl = globals().get("_pick_modified")
+    if impl is not None and impl is not stub:
+        return impl(
+            question_prolog=question_prolog,
+            variables=variables,
+            bridge=bridge,
+            filter_equiv_batch=filter_equiv_batch,
+            target_atom_count=target_atom_count,
+            seed=seed,
+            timeout=timeout,
+            spoken_only=spoken_only,
+        )
     raise RuntimeError("orchestrator required: use orchestrator._pick_modified")
 
 
@@ -1281,7 +1315,28 @@ def _pick_wrongs(
     spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie distractor non equivalenti per una formula domanda."""
-    """Orchestration removed: use `orchestrator._pick_wrongs` instead."""
+    stub = _pick_wrongs
+    try:
+        import orchestrator  # noqa: F401
+    except Exception:
+        pass
+    impl = globals().get("_pick_wrongs")
+    if impl is not None and impl is not stub:
+        return impl(
+            question_prolog=question_prolog,
+            correct_prolog=correct_prolog,
+            variables=variables,
+            target_atom_count=target_atom_count,
+            wrong_answers_count=wrong_answers_count,
+            operator_cycles=operator_cycles,
+            from_correct_answer=from_correct_answer,
+            bridge=bridge,
+            filter_wrong_batch=filter_wrong_batch,
+            seed=seed,
+            timeout=timeout,
+            timeout_provider=timeout_provider,
+            spoken_only=spoken_only,
+        )
     raise RuntimeError("orchestrator required: use orchestrator._pick_wrongs")
 
 
@@ -1301,7 +1356,27 @@ def _collect_candidate_formulas(
     spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie un pool di formule candidate con vincoli condivisi tra builder quiz."""
-    """Orchestration removed: use `orchestrator._collect_candidate_formulas` instead."""
+    stub = _collect_candidate_formulas
+    try:
+        import orchestrator  # noqa: F401
+    except Exception:
+        pass
+    impl = globals().get("_collect_candidate_formulas")
+    if impl is not None and impl is not stub:
+        return impl(
+            bridge=bridge,
+            variables=variables,
+            required_options=required_options,
+            rng=rng,
+            timeout_provider=timeout_provider,
+            operator_cycles=operator_cycles,
+            target_atom_count=target_atom_count,
+            excluded_formulas=excluded_formulas,
+            dedupe_by_commutative_signature=dedupe_by_commutative_signature,
+            require_non_empty_vars=require_non_empty_vars,
+            forbid_adjacent_duplicate_atoms=forbid_adjacent_duplicate_atoms,
+            spoken_only=spoken_only,
+        )
     raise RuntimeError("orchestrator required: use orchestrator._collect_candidate_formulas")
 
 

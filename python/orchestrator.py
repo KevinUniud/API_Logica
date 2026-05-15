@@ -58,13 +58,6 @@ def generate_formula_by_variable_count_json(
     allow_spoken_mode: bool = False,
 ) -> dict:
     bridge = _ensure_bridge(bridge)
-    formula = generator.generate_formula_by_variable_count(
-        variable_count=variable_count,
-        use_all=use_all,
-        timeout=timeout,
-        seed=seed,
-        bridge=bridge,
-    )
     return generator.generate_formula_by_variable_count_json(
         variable_count=variable_count,
         use_all=use_all,
@@ -657,6 +650,9 @@ def multiple_questions(
                 attempt_payload = dict(normalized_payload)
                 if isinstance(attempt_payload.get("seed"), int):
                     attempt_payload["seed"] = int(attempt_payload["seed"]) + (attempt - 1)
+                else:
+                    attempt_payload["seed"] = rng.randint(0, 2**31 - 1)
+                    attempt_payload["seed"] += index * max_attempts + (attempt - 1)
 
                 try:
                     if normalized_operation == "build_exercise":
