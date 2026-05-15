@@ -32,21 +32,21 @@ def generate_formula_json(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Wrapper: generate a formula and return JSON-serializable payload."""
     bridge = _ensure_bridge(bridge)
     variables_arg = variables if variables is not None else generator.DEFAULT_VARIABLES
-    expr = generator._as_ast(
-        generator.generate_formula(
-            depth=depth,
-            variables=variables_arg,
-            use_all=use_all,
-            timeout=timeout,
-            seed=seed,
-            bridge=bridge,
-        )
+    # Delegate to generator JSON wrapper which supports spoken rendering
+    return generator.generate_formula_json(
+        depth=depth,
+        variables=variables_arg,
+        use_all=use_all,
+        timeout=timeout,
+        seed=seed,
+        bridge=bridge,
+        allow_spoken_mode=allow_spoken_mode,
     )
-    return generator.formula_payload(expr, source="orchestrator_prolog_depth")
 
 
 def generate_formula_by_variable_count_json(
@@ -55,6 +55,7 @@ def generate_formula_by_variable_count_json(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     bridge = _ensure_bridge(bridge)
     formula = generator.generate_formula_by_variable_count(
@@ -64,7 +65,14 @@ def generate_formula_by_variable_count_json(
         seed=seed,
         bridge=bridge,
     )
-    return generator.formula_payload(generator._as_ast(formula), source="orchestrator_prolog_variable_count", variable_count=variable_count)
+    return generator.generate_formula_by_variable_count_json(
+        variable_count=variable_count,
+        use_all=use_all,
+        timeout=timeout,
+        seed=seed,
+        bridge=bridge,
+        allow_spoken_mode=allow_spoken_mode,
+    )
 
 
 def build_ex_json(

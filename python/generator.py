@@ -1171,6 +1171,7 @@ def generate_formula_json(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Genera una formula e restituisce un payload pronto per JSON."""
     _req_int_ge("timeout", int(timeout), 1)
@@ -1183,6 +1184,11 @@ def generate_formula_json(
         bridge=bridge,
     ))
     result = formula_payload(expr, source="prolog_depth")
+    if allow_spoken_mode:
+        try:
+            result["formula_spoken"] = _to_spoken_string(expr)
+        except Exception:
+            pass
     _ensure_keys(result, ["formula_prolog", "source"])
     return result
 
@@ -1216,6 +1222,7 @@ def generate_formula_by_variable_count_json(
     timeout: int = 10,
     seed: int | None = None,
     bridge: PrologBridge | None = None,
+    allow_spoken_mode: bool = False,
 ) -> dict:
     """Genera una formula con N variabili e restituisce un payload pronto per JSON."""
     _req_int_ge("variable_count", variable_count, 1)
@@ -1227,11 +1234,18 @@ def generate_formula_by_variable_count_json(
         seed=seed,
         bridge=bridge,
     )
+    ast = _as_ast(formula)
     result = formula_payload(
-        _as_ast(formula),
+        ast,
         source="prolog_variable_count",
         variable_count=variable_count,
     )
+    if allow_spoken_mode:
+        try:
+            result["formula_spoken"] = _to_spoken_string(ast)
+        except Exception:
+            # If spoken rendering fails, don't break the JSON wrapper — return prolog only
+            pass
     _ensure_keys(result, ["formula_prolog", "source", "variable_count"])
     return result
 
