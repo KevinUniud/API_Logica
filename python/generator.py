@@ -1093,6 +1093,16 @@ def _normalize_formula_text(formula: Any) -> str:
     return _as_prolog(formula).replace(" ", "")
 
 
+def _get_orchestrator_module() -> Any | None:
+    """Importa l'orchestrator solo quando serve per recuperare le implementazioni reali."""
+    try:
+        import orchestrator
+
+        return orchestrator
+    except Exception:
+        return None
+
+
 def _require_pairwise_distinct(formulas: Sequence[Any], context: str) -> None:
     """Verifica che tutte le formule siano diverse tra loro."""
     normalized = [_normalize_formula_text(formula) for formula in formulas]
@@ -1122,13 +1132,9 @@ def _transform_answer_candidates(
     
     In entrambi i casi: deduplicazione e normalizzazione finale.
     """
-    stub = _transform_answer_candidates
-    try:
-        import orchestrator  # noqa: F401
-    except Exception:
-        pass
-    impl = globals().get("_transform_answer_candidates")
-    if impl is not None and impl is not stub:
+    orchestrator_module = _get_orchestrator_module()
+    impl = getattr(orchestrator_module, "_transform_answer_candidates", None) if orchestrator_module else None
+    if callable(impl) and impl is not _transform_answer_candidates:
         return impl(
             formula=formula,
             bridge=bridge,
@@ -1138,6 +1144,124 @@ def _transform_answer_candidates(
         )
     raise RuntimeError("orchestrator required: use orchestrator._transform_answer_candidates")
 
+
+def generate_spoken_ready_prolog(
+    formula: Any,
+    bridge: PrologBridge | None = None,
+    timeout: int = 10,
+    try_factor: bool = True,
+) -> tuple[str, dict]:
+    """Produce una stringa Prolog normalizzata adatta al traduttore parlato esterno.
+
+    Flusso:
+    1. to_nnf via Prolog (negazioni spinte agli atomi)
+    2. expand_implications via Prolog (eliminiamo imp/iff espandendoli)
+    3. ricostruzione AST locale per appiattire and/or e bilanciare l'albero
+    4. opzionalmente provare un semplice factoring per reintrodurre un unico imp
+    Ritorna (prolog_str, metadata)
+    """
+    bridge = _ensure_bridge(bridge)
+    meta: dict = {"spoken_transformations": [], "spoken_fallback_used": False}
+
+    prolog_in = _as_prolog(formula)
+
+    # 1) to_nnf
+    nnf_res = []
+    try:
+        nnf_res = _safe_bridge_call(bridge.to_nnf, prolog_in, timeout=timeout)
+    except Exception:
+        nnf_res = []
+
+    if nnf_res:
+        nnf = nnf_res[0]
+        meta["spoken_transformations"].append("to_nnf")
+    else:
+        nnf = prolog_in
+        meta["spoken_fallback_used"] = True
+
+    # 2) expand_implications
+    exp_res = []
+    try:
+        exp_res = _safe_bridge_call(bridge.expand_implications, nnf, timeout=timeout)
+    except Exception:
+        exp_res = []
+
+    if exp_res:
+        expanded = exp_res[0]
+        meta["spoken_transformations"].append("expand_implications")
+    else:
+        expanded = nnf
+        meta["spoken_fallback_used"] = True
+
+    # Convert to AST and apply local appiattimenti
+    try:
+        ast = _as_ast(expanded)
+
+        def _rebuild_balanced(terms: list[Any], op_cls: type) -> Any:
+            if not terms:
+                raise ValueError("No terms to rebuild")
+            if len(terms) == 1:
+                return terms[0]
+            mid = len(terms) // 2
+            left = _rebuild_balanced(terms[:mid], op_cls)
+            right = _rebuild_balanced(terms[mid:], op_cls)
+            return op_cls(left, right)
+
+        def _flatten_rebuild(node: Any) -> Any:
+            if isinstance(node, Var):
+                return node
+            if isinstance(node, Not):
+                return Not(_flatten_rebuild(node.expr))
+            if isinstance(node, (And, Or)):
+                op_cls = type(node)
+                terms: list[Any] = []
+
+                def collect(n: Any) -> None:
+                    if isinstance(n, op_cls):
+                        collect(n.left)
+                        collect(n.right)
+                    else:
+                        terms.append(_flatten_rebuild(n))
+
+                collect(node)
+                return _rebuild_balanced(terms, op_cls)
+            if isinstance(node, Imp):
+                return Imp(_flatten_rebuild(node.left), _flatten_rebuild(node.right))
+            if isinstance(node, Iff):
+                return Iff(_flatten_rebuild(node.left), _flatten_rebuild(node.right))
+            return node
+
+        rebuilt = _flatten_rebuild(ast)
+        meta["spoken_transformations"].append("flatten_associative")
+
+        # 3) try simple factoring to reintroduce a single implication when possible
+        factored: Any | None = None
+        if try_factor:
+            try:
+                if isinstance(rebuilt, Or):
+                    left = rebuilt.left
+                    right = rebuilt.right
+                    # pattern: or(not(A), B)  -> imp(A, B)
+                    if isinstance(left, Not) and isinstance(left.expr, (Var, And, Or, Imp, Iff)):
+                        factored = Imp(left.expr, right)
+                    elif isinstance(right, Not) and isinstance(right.expr, (Var, And, Or, Imp, Iff)):
+                        factored = Imp(right.expr, left)
+            except Exception:
+                factored = None
+
+        if factored is not None:
+            result_ast = factored
+            meta["spoken_transformations"].append("factored_imp")
+        else:
+            result_ast = rebuilt
+
+        result_prolog = to_prolog(result_ast)
+    except Exception:
+        # In case of any local AST handling failure, return the expanded Prolog
+        result_prolog = expanded
+        meta["spoken_fallback_used"] = True
+
+    return result_prolog, meta
 
 def generate_formula(
     depth: int | None = None,
@@ -1180,6 +1304,8 @@ def generate_formula(
     return selected
 
 
+
+
 def generate_formula_json(
     depth: int | None = None,
     variables: Sequence[str] = DEFAULT_VARIABLES,
@@ -1202,8 +1328,13 @@ def generate_formula_json(
     result = formula_payload(expr, source="prolog_depth")
     if allow_spoken_mode:
         try:
-            result["formula_spoken"] = _to_spoken_string(expr)
+            # Produce a Prolog-normalized form suitable for external spoken translator.
+            spoken_prolog, meta = generate_spoken_ready_prolog(expr, bridge=None)
+            result["spoken_ready_prolog"] = spoken_prolog
+            result["spoken_transformations"] = meta.get("spoken_transformations", [])
+            result["spoken_fallback_used"] = bool(meta.get("spoken_fallback_used", False))
         except Exception:
+            # If anything fails, don't break the JSON wrapper — keep only prolog
             pass
     _ensure_keys(result, ["formula_prolog", "source"])
     return result
@@ -1260,9 +1391,12 @@ def generate_formula_by_variable_count_json(
     )
     if allow_spoken_mode:
         try:
-            result["formula_spoken"] = _to_spoken_string(ast)
+            spoken_prolog, meta = generate_spoken_ready_prolog(ast, bridge=None)
+            result["spoken_ready_prolog"] = spoken_prolog
+            result["spoken_transformations"] = meta.get("spoken_transformations", [])
+            result["spoken_fallback_used"] = bool(meta.get("spoken_fallback_used", False))
         except Exception:
-            # If spoken rendering fails, don't break the JSON wrapper — return prolog only
+            # If spoken pipeline fails, don't break the JSON wrapper — return prolog only
             pass
     _ensure_keys(result, ["formula_prolog", "source", "variable_count"])
     return result
@@ -1279,13 +1413,9 @@ def _pick_modified(
     spoken_only: bool = False,
 ) -> tuple[str, int]:
     """Seleziona una formula equivalente con almeno due trasformazioni non banali."""
-    stub = _pick_modified
-    try:
-        import orchestrator  # noqa: F401
-    except Exception:
-        pass
-    impl = globals().get("_pick_modified")
-    if impl is not None and impl is not stub:
+    orchestrator_module = _get_orchestrator_module()
+    impl = getattr(orchestrator_module, "_pick_modified", None) if orchestrator_module else None
+    if callable(impl) and impl is not _pick_modified:
         return impl(
             question_prolog=question_prolog,
             variables=variables,
@@ -1315,13 +1445,9 @@ def _pick_wrongs(
     spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie distractor non equivalenti per una formula domanda."""
-    stub = _pick_wrongs
-    try:
-        import orchestrator  # noqa: F401
-    except Exception:
-        pass
-    impl = globals().get("_pick_wrongs")
-    if impl is not None and impl is not stub:
+    orchestrator_module = _get_orchestrator_module()
+    impl = getattr(orchestrator_module, "_pick_wrongs", None) if orchestrator_module else None
+    if callable(impl) and impl is not _pick_wrongs:
         return impl(
             question_prolog=question_prolog,
             correct_prolog=correct_prolog,
@@ -1356,13 +1482,9 @@ def _collect_candidate_formulas(
     spoken_only: bool = False,
 ) -> list[str]:
     """Raccoglie un pool di formule candidate con vincoli condivisi tra builder quiz."""
-    stub = _collect_candidate_formulas
-    try:
-        import orchestrator  # noqa: F401
-    except Exception:
-        pass
-    impl = globals().get("_collect_candidate_formulas")
-    if impl is not None and impl is not stub:
+    orchestrator_module = _get_orchestrator_module()
+    impl = getattr(orchestrator_module, "_collect_candidate_formulas", None) if orchestrator_module else None
+    if callable(impl) and impl is not _collect_candidate_formulas:
         return impl(
             bridge=bridge,
             variables=variables,
@@ -2754,6 +2876,31 @@ def _question_identity_key(operation: str, result: Any) -> str:
     """Costruisce una chiave stabile per identificare domande duplicate nel batch."""
     if not isinstance(result, dict):
         return f"{operation}|{json.dumps(result, sort_keys=True, ensure_ascii=False)}"
+
+    if operation == "build_ex_depth" and isinstance(result.get("original_formula"), dict) and isinstance(result.get("modified_formula"), dict):
+        identity = {
+            "original_formula": result["original_formula"].get("formula_prolog"),
+            "modified_formula": result["modified_formula"].get("formula_prolog"),
+            "rewrite_steps": result.get("rewrite_steps"),
+            "variables": result.get("variables"),
+            "atom_count": result.get("atom_count"),
+        }
+        return f"{operation}|{json.dumps(identity, sort_keys=True, ensure_ascii=False)}"
+
+    if operation == "build_logical_consequence_question" and isinstance(result.get("options"), list):
+        identity = {
+            "type": result.get("type"),
+            "variable_count": result.get("variable_count"),
+            "correct_options_count": result.get("correct_options_count"),
+            "wrong_options_count": result.get("wrong_options_count"),
+            "variables": result.get("variables"),
+            "options": [
+                option.get("formula_prolog") if isinstance(option, dict) else option
+                for option in result.get("options", [])
+            ],
+            "source": result.get("source"),
+        }
+        return f"{operation}|{json.dumps(identity, sort_keys=True, ensure_ascii=False)}"
 
     if "question_text" in result:
         identity = {
