@@ -891,68 +891,16 @@ def _scramble_formula_prolog(formula: Any, rng: random.Random) -> str:
 
 
 def _to_spoken_string(formula: Any, rng: random.Random | None = None) -> str:
-    """Rende una formula 'spoken-friendly' senza parentesi, ad esempio
-    and(p, and(q, r)) -> "p and q and r".
+    """Return the Prolog string for the formula even when spoken requested.
 
-    Se viene passato `rng` viene applicato lo stesso rimescolamento commutativo
-    usato altrove prima del rendering per diversificare l'output parlato.
+    Historically this rendered a human-friendly "spoken" representation
+    (e.g. 'p and q'), but callers expect a Prolog term when `allow_spoken_mode`
+    is used. To preserve that contract we return a Prolog-formatted string.
+    If `rng` is provided we apply the commutative scramble used elsewhere.
     """
-    ast = _scramble_commutative_formula(formula, rng) if rng is not None else _as_ast(formula)
-    # Normalizza le negazioni in modo che compaiano solo sugli atomi
-    try:
-        ast = _push_negations(ast)
-    except Exception:
-        # In caso di problemi con la trasformazione, fallback alla AST originale
-        ast = _as_ast(formula)
-
-    def flatten_and(node: Any) -> list[str]:
-        if isinstance(node, Var):
-            return [node.name]
-        if isinstance(node, And):
-            return flatten_and(node.left) + flatten_and(node.right)
-        # Fallback: render subterm as prolog-if-not-var
-        return [to_prolog(node)]
-
-    def flatten_or(node: Any) -> list[str]:
-        if isinstance(node, Var):
-            return [node.name]
-        if isinstance(node, Or):
-            return flatten_or(node.left) + flatten_or(node.right)
-        return [to_prolog(node)]
-
-    # Precedence values: higher means binds tighter
-    def prec(node: Any) -> int:
-        if isinstance(node, Var):
-            return 100
-        if isinstance(node, Not):
-            return 90
-        if isinstance(node, And):
-            return 70
-        if isinstance(node, Or):
-            return 70
-        if isinstance(node, Imp):
-            return 50
-        if isinstance(node, Iff):
-            return 40
-        return 0
-
-    def render(node: Any) -> str:
-        if isinstance(node, Var):
-            return node.name
-        if isinstance(node, Not):
-            child = node.expr
-            return f"not {render(child)}"
-        if isinstance(node, And):
-            return f"{render(node.left)} and {render(node.right)}"
-        if isinstance(node, Or):
-            return f"{render(node.left)} or {render(node.right)}"
-        if isinstance(node, Imp):
-            return f"{render(node.left)} imp {render(node.right)}"
-        if isinstance(node, Iff):
-            return f"{render(node.left)} iff {render(node.right)}"
-        return to_prolog(node)
-
-    return render(ast)
+    if rng is None:
+        return _as_prolog(formula)
+    return _scramble_formula_prolog(formula, rng)
 
 
 def _formula_entry(expr: Any, *, rng: random.Random | None = None, **extra) -> dict:

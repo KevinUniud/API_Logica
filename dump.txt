@@ -5,6 +5,46 @@
     "wrong_answers_prolog": [
       "and(and(q,p),imp(s,r))",
       "and(and(p,q),imp(s,r))"
+    ],
+    "question_spoken_ready_prolog": "or(or(not(p),not(q)),or(not(s),r))",
+    "correct_answer_spoken_ready_prolog": "or(or(not(q),not(p)),or(r,not(s)))",
+    "wrong_answers_spoken_ready_prolog": [
+      "and(q,and(p,or(not(s),r)))",
+      "and(p,and(q,or(not(s),r)))"
+    ],
+    "question_spoken_ready_prolog_meta": {
+      "spoken_transformations": [
+        "to_nnf",
+        "expand_implications",
+        "flatten_associative"
+      ],
+      "spoken_fallback_used": false
+    },
+    "correct_answer_spoken_ready_prolog_meta": {
+      "spoken_transformations": [
+        "to_nnf",
+        "expand_implications",
+        "flatten_associative"
+      ],
+      "spoken_fallback_used": false
+    },
+    "wrong_answers_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      }
     ]
   },
   "build_tvq": {
@@ -21,6 +61,92 @@
       "imp(and(p,q),and(r,s))",
       "and(and(p,r),or(q,s))",
       "or(and(p,q),or(r,s))"
+    ],
+    "true_options_spoken_ready_prolog": [
+      "imp(p,or(not(q),and(r,s)))"
+    ],
+    "false_options_spoken_ready_prolog": [
+      "and(or(or(not(p),not(q)),or(not(r),s)),or(and(r,not(s)),and(p,q)))",
+      "and(p,and(r,or(q,s)))",
+      "or(and(p,q),or(r,s))"
+    ],
+    "options_spoken_ready_prolog": [
+      "and(or(or(not(p),not(q)),or(not(r),s)),or(and(r,not(s)),and(p,q)))",
+      "imp(p,or(not(q),and(r,s)))",
+      "and(p,and(r,or(q,s)))",
+      "or(and(p,q),or(r,s))"
+    ],
+    "true_options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative",
+          "factored_imp"
+        ],
+        "spoken_fallback_used": false
+      }
+    ],
+    "false_options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      }
+    ],
+    "options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative",
+          "factored_imp"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      }
     ]
   },
   "generate_formula_by_variable_count": "or(and(p,q),and(r,s))",
@@ -39,6 +165,111 @@
       "and(and(p,s),and(q,r))",
       "imp(and(p,q),iff(r,s))",
       "iff(and(p,q),iff(r,s))"
+    ],
+    "question_spoken_ready_prolog": "imp(p,or(not(q),and(r,s)))",
+    "correct_options_spoken_ready_prolog": [
+      "imp(p,or(not(q),and(or(not(r),s),or(not(s),r))))"
+    ],
+    "wrong_options_spoken_ready_prolog": [
+      "and(p,and(q,or(r,s)))",
+      "and(and(p,s),and(q,r))",
+      "and(or(not(p),or(not(q),and(or(not(r),s),or(not(s),r)))),or(and(r,not(s)),or(and(s,not(r)),and(p,q))))"
+    ],
+    "options_spoken_ready_prolog": [
+      "and(p,and(q,or(r,s)))",
+      "and(and(p,s),and(q,r))",
+      "imp(p,or(not(q),and(or(not(r),s),or(not(s),r))))",
+      "and(or(not(p),or(not(q),and(or(not(r),s),or(not(s),r)))),or(and(r,not(s)),or(and(s,not(r)),and(p,q))))"
+    ],
+    "question_spoken_ready_prolog_meta": {
+      "spoken_transformations": [
+        "to_nnf",
+        "expand_implications",
+        "flatten_associative",
+        "factored_imp"
+      ],
+      "spoken_fallback_used": false
+    },
+    "correct_options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative",
+          "factored_imp"
+        ],
+        "spoken_fallback_used": false
+      }
+    ],
+    "wrong_options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      }
+    ],
+    "options_spoken_ready_prolog_meta": [
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative",
+          "factored_imp"
+        ],
+        "spoken_fallback_used": false
+      },
+      {
+        "spoken_transformations": [
+          "to_nnf",
+          "expand_implications",
+          "flatten_associative"
+        ],
+        "spoken_fallback_used": false
+      }
     ]
+  },
+  "generate_formula_by_variable_count_spoken_ready_prolog": "or(and(p,q),and(r,s))",
+  "generate_formula_by_variable_count_spoken_meta": {
+    "spoken_transformations": [
+      "to_nnf",
+      "expand_implications",
+      "flatten_associative"
+    ],
+    "spoken_fallback_used": false
   }
 }
